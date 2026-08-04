@@ -146,6 +146,10 @@ llmperf/
                                                      └──────────────────┘
 ```
 
+## 🤖 开发说明
+
+本项目使用 **Vibe Coding** 方式开发完成，全程由 AI 辅助编码。
+
 ## 📄 许可证
 
 [Apache License 2.0](LICENSE)
