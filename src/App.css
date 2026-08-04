@@ -270,6 +270,19 @@ html, body, #root {
   white-space: pre-wrap;
 }
 
+/* 流式输出光标动画 */
+.chat-msg.streaming .streaming-cursor {
+  display: inline-block;
+  color: #7c3aed;
+  font-weight: bold;
+  animation: blink 0.8s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 .chat-error {
   align-self: flex-start;
   background: #1c1016;

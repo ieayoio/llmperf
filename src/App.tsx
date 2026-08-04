@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
 interface ChatMessage {
@@ -13,6 +14,15 @@ interface ChatWindow {
   status: "idle" | "sending" | "done" | "error";
   error?: string;
   duration?: number;
+  accumulatedContent: string; // 流式累积内容
+}
+
+interface StreamChunkPayload {
+  window_id: number;
+  content: string;
+  finished: boolean;
+  error: string | null;
+  duration_ms: number;
 }
 
 function App() {
@@ -28,8 +38,69 @@ function App() {
       id: i,
       messages: [],
       status: "idle",
+      accumulatedContent: "",
     }))
   );
+
+  // 监听流式事件
+  useEffect(() => {
+    let cancelled = false;
+    listen<StreamChunkPayload>("stream_chunk", (event) => {
+      if (cancelled) return;
+      const payload = event.payload;
+
+      setWindows((prev) =>
+        prev.map((w) => {
+          if (w.id !== payload.window_id) return w;
+
+          if (payload.finished) {
+            // 最终完成
+            const finalMsg: ChatMessage = {
+              role: "assistant",
+              content: w.accumulatedContent || (payload.error ? `错误: ${payload.error}` : ""),
+            };
+            return {
+              ...w,
+              messages: [...w.messages, finalMsg],
+              status: payload.error ? ("error" as const) : ("done" as const),
+              error: payload.error || undefined,
+              duration: payload.duration_ms,
+              accumulatedContent: "",
+            };
+          } else {
+            // 流式 chunk，追加到累积内容
+            const newAccumulated = w.accumulatedContent + payload.content;
+            // 更新最后一条 assistant 消息（如果存在）
+            let realIndex = -1;
+            for (let i = w.messages.length - 1; i >= 0; i--) {
+              if (w.messages[i].role === "assistant") {
+                realIndex = i;
+                break;
+              }
+            }
+            let newMessages = w.messages;
+            if (realIndex >= 0) {
+              newMessages = [...w.messages];
+              newMessages[realIndex] = {
+                ...newMessages[realIndex],
+                content: newAccumulated,
+              };
+            }
+            return {
+              ...w,
+              accumulatedContent: newAccumulated,
+              messages: newMessages,
+              status: "sending" as const,
+            };
+          }
+        })
+      );
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 并发数变化时同步窗口数组
   useEffect(() => {
@@ -46,47 +117,27 @@ function App() {
           id: prev.length + i,
           messages: [],
           status: "idle" as const,
+          accumulatedContent: "",
         })
       );
       return [...prev, ...added];
     });
   }, [concurrency]);
 
-  const updateWindow = (
-    id: number,
-    updater: (w: ChatWindow) => ChatWindow
-  ) => {
-    setWindows((prev) => prev.map((w) => (w.id === id ? updater(w) : w)));
-  };
-
-  const addMessage = (windowId: number, msg: ChatMessage) => {
-    updateWindow(windowId, (w) => ({
-      ...w,
-      messages: [...w.messages, msg],
-    }));
-  };
-
   const handleSend = async () => {
     if (!message.trim() || !baseURL.trim() || !apiKey.trim()) return;
 
-    // 先更新所有窗口状态为 sending
+    // 先清空所有窗口并更新状态为 sending
     setWindows((prev) =>
       prev.map((w, i) =>
         i < concurrency
-          ? { ...w, status: "sending" as const, error: undefined }
-          : { ...w, status: "idle" as const, messages: [] }
+          ? { ...w, status: "sending" as const, error: undefined, messages: [], accumulatedContent: "" }
+          : { ...w, status: "idle" as const, messages: [], accumulatedContent: "" }
       )
     );
 
-    // 调用 Rust 后端并发请求
-    const results = await invoke<
-      Array<{
-        window_id: number;
-        assistant_content: string;
-        duration_ms: number;
-        error: string | null;
-      }>
-    >("send_concurrent_request", {
+    // 调用 Rust 后端并发流式请求
+    await invoke<void>("send_concurrent_request", {
       config: {
         base_url: baseURL,
         api_key: apiKey,
@@ -95,33 +146,6 @@ function App() {
       },
       concurrency,
     });
-
-    // 将 Rust 返回的结果写入各个窗口
-    for (const r of results) {
-      addMessage(r.window_id, {
-        role: "user",
-        content: message,
-      });
-
-      if (r.error) {
-        updateWindow(r.window_id, (w) => ({
-          ...w,
-          status: "error" as const,
-          error: r.error,
-          duration: r.duration_ms,
-        }));
-      } else {
-        addMessage(r.window_id, {
-          role: "assistant",
-          content: r.assistant_content,
-        });
-        updateWindow(r.window_id, (w) => ({
-          ...w,
-          status: "done" as const,
-          duration: r.duration_ms,
-        }));
-      }
-    }
   };
 
   const clearAllWindows = () => {
@@ -132,6 +156,7 @@ function App() {
         status: "idle" as const,
         error: undefined,
         duration: undefined,
+        accumulatedContent: "",
       }))
     );
   };
@@ -190,7 +215,7 @@ function App() {
             <label>发送消息</label>
             <input
               type="text"
-              placeholder="输入要测试的消息..."
+              placeholder="输入要测试的消息 (Enter 发送)"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
@@ -227,7 +252,7 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
       case "idle":
         return "⏸ 空闲";
       case "sending":
-        return "⏳ 发送中...";
+        return `⏳ 发送中... (${win.accumulatedContent.length} 字符)`;
       case "done":
         return `✅ 完成 (${win.duration}ms)`;
       case "error":
@@ -243,7 +268,7 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
       </div>
 
       <div className="chat-messages">
-        {win.messages.length === 0 && win.status === "idle" && (
+        {win.messages.length === 0 && win.accumulatedContent.length === 0 && win.status === "idle" && (
           <div className="chat-empty">等待发送...</div>
         )}
         {win.messages.map((msg, i) => (
@@ -257,6 +282,16 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
             <div className="chat-msg-content">{msg.content}</div>
           </div>
         ))}
+        {/* 流式输出中的累积内容（尚未成为正式消息） */}
+        {win.status === "sending" && win.accumulatedContent.length > 0 && (
+          <div className="chat-msg assistant streaming">
+            <div className="chat-msg-label">🤖 模型</div>
+            <div className="chat-msg-content">
+              {win.accumulatedContent}
+              <span className="streaming-cursor">▌</span>
+            </div>
+          </div>
+        )}
         {win.status === "error" && win.error && (
           <div className="chat-error">
             <strong>错误:</strong> {win.error}
