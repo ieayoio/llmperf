@@ -35,10 +35,10 @@ async fn send_concurrent_request(
     config: LLMRequestConfig,
     concurrency: usize,
 ) -> Vec<SingleResult> {
-    let base_url = config.base_url.trim_end_matches('/');
-    let api_key = &config.api_key;
-    let model = &config.model;
-    let user_message = &config.message;
+    let base_url = config.base_url.trim().to_string();
+    let api_key = config.api_key.trim();
+    let model = config.model.trim();
+    let user_message = config.message.trim();
 
     let mut handles = Vec::new();
 
@@ -55,7 +55,7 @@ async fn send_concurrent_request(
             let client = Client::with_config(
                 OpenAIConfig::new()
                     .with_api_key(&api_key)
-                    .with_api_base(&format!("{base_url}/chat/completions")),
+                    .with_api_base(&base_url),
             );
 
             let messages: Vec<ChatCompletionRequestMessage> = vec![

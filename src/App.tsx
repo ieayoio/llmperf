@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
@@ -19,9 +19,10 @@ function App() {
   const [baseURL, setBaseURL] = useState("https://api.openai.com/v1");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("gpt-3.5-turbo");
-  const [concurrency, setConcurrency] = useState(4);
+  const [concurrency, setConcurrency] = useState(1);
   const [message, setMessage] = useState("");
 
+  // 窗口数量跟随 concurrency 同步
   const [windows, setWindows] = useState<ChatWindow[]>(() =>
     Array.from({ length: 4 }, (_, i) => ({
       id: i,
@@ -29,6 +30,27 @@ function App() {
       status: "idle",
     }))
   );
+
+  // 并发数变化时同步窗口数组
+  useEffect(() => {
+    setWindows((prev) => {
+      if (prev.length === concurrency) return prev;
+      if (prev.length > concurrency) {
+        // 缩小：保留前 N 个窗口，去掉多余的
+        return prev.slice(0, concurrency);
+      }
+      // 放大：在末尾追加新的空窗口
+      const added = Array.from(
+        { length: concurrency - prev.length },
+        (_, i) => ({
+          id: prev.length + i,
+          messages: [],
+          status: "idle" as const,
+        })
+      );
+      return [...prev, ...added];
+    });
+  }, [concurrency]);
 
   const updateWindow = (
     id: number,
@@ -189,7 +211,7 @@ function App() {
       </div>
 
       {/* ====== 底部聊天窗口区域 ====== */}
-      <div className="chat-grid">
+      <div className={`chat-grid cols-${concurrency}`}>
         {windows.map((win) => (
           <ChatWindow key={win.id} window={win} />
         ))}

@@ -145,7 +145,8 @@ html, body, #root {
   display: grid;
   flex: 1;
   gap: 10px;
-  overflow: hidden;
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .chat-grid.cols-1 { grid-template-columns: 1fr; }
@@ -154,7 +155,7 @@ html, body, #root {
 .chat-grid.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .chat-grid.cols-5 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr; }
 
-/* 5个以上用 5 列 + 自动换行，超出部分滚动 */
+/* 6个以上用 4 列 + 自动换行，超出部分滚动 */
 @media (min-width: 1200px) {
   .chat-grid.cols-6,
   .chat-grid.cols-7,
