@@ -16,7 +16,7 @@ interface ChatWindow {
 }
 
 function App() {
-  const [baseURL, setBaseURL] = useState("https://api.openai.com/v1");
+  const [baseURL, setBaseURL] = useState("http://127.0.0.1:16777/v1");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("gpt-3.5-turbo");
   const [concurrency, setConcurrency] = useState(1);
@@ -147,7 +147,7 @@ function App() {
             <label>Base URL</label>
             <input
               type="text"
-              placeholder="https://api.openai.com/v1"
+              placeholder="http://127.0.0.1:16777/v1"
               value={baseURL}
               onChange={(e) => setBaseURL(e.target.value)}
             />

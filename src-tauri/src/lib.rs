@@ -36,9 +36,9 @@ async fn send_concurrent_request(
     concurrency: usize,
 ) -> Vec<SingleResult> {
     let base_url = config.base_url.trim().to_string();
-    let api_key = config.api_key.trim();
-    let model = config.model.trim();
-    let user_message = config.message.trim();
+    let api_key = config.api_key.trim().to_string();
+    let model = config.model.trim().to_string();
+    let user_message = config.message.trim().to_string();
 
     let mut handles = Vec::new();
 
@@ -54,7 +54,7 @@ async fn send_concurrent_request(
             // Client::with_config 直接返回 Client，不是 Result
             let client = Client::with_config(
                 OpenAIConfig::new()
-                    .with_api_key(&api_key)
+                    .with_api_key(api_key.as_str())
                     .with_api_base(&base_url),
             );
 
@@ -66,7 +66,7 @@ async fn send_concurrent_request(
             ];
 
             let request = match CreateChatCompletionRequestArgs::default()
-                .model(&model)
+                .model(model.as_str())
                 .messages(messages)
                 .build()
             {
