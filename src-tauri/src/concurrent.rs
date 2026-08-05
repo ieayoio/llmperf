@@ -12,15 +12,15 @@ pub async fn run_concurrent_requests(
     let base_url = config.base_url.trim().to_string();
     let api_key = config.api_key.trim().to_string();
     let model = config.model.trim().to_string();
-    let user_message = config.message.trim().to_string();
+    let messages = config.messages.clone();
 
-    // 构建请求配置，克隆给每个并发任务
+    // 构建请求配置，克隆给每个并发任务（保留对话历史）
     let configs: Vec<LLMRequestConfig> = (0..concurrency)
         .map(|_| LLMRequestConfig {
             base_url: base_url.clone(),
             api_key: api_key.clone(),
             model: model.clone(),
-            message: user_message.clone(),
+            messages: messages.clone(),
         })
         .collect();
 

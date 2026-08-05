@@ -1,22 +1,28 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
+/** 单条聊天消息 */
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
 }
 
+/** 单个对话窗口的状态 */
 interface ChatWindow {
   id: number;
+  /** 完整的对话历史（user/assistant 交替） */
   messages: ChatMessage[];
+  /** 流式响应状态 */
   status: "idle" | "sending" | "done" | "error";
   error?: string;
   duration?: number;
-  accumulatedContent: string; // 流式累积内容
+  /** 流式累积内容（尚未成为正式消息） */
+  accumulatedContent: string;
 }
 
+/** 流式 chunk 事件 */
 interface StreamChunkPayload {
   window_id: number;
   content: string;
@@ -32,7 +38,7 @@ function App() {
   const [concurrency, setConcurrency] = useState(1);
   const [message, setMessage] = useState("");
 
-  // 窗口数量跟随 concurrency 同步
+  // 窗口状态：每个窗口维护自己的对话历史
   const [windows, setWindows] = useState<ChatWindow[]>(() =>
     Array.from({ length: 4 }, (_, i) => ({
       id: i,
@@ -41,6 +47,10 @@ function App() {
       accumulatedContent: "",
     }))
   );
+
+  // 用 ref 始终持有最新的窗口状态，避免 handleSend 中的闭包过时问题
+  const windowsRef = useRef<ChatWindow[]>(windows);
+  windowsRef.current = windows;
 
   // 监听流式事件
   useEffect(() => {
@@ -54,13 +64,14 @@ function App() {
           if (w.id !== payload.window_id) return w;
 
           if (payload.finished) {
-            // 最终完成
+            // 最终完成：将累积内容转为正式的 assistant 消息
             const finalMsg: ChatMessage = {
               role: "assistant",
               content: w.accumulatedContent || (payload.error ? `错误: ${payload.error}` : ""),
             };
             return {
               ...w,
+              // 将 assistant 消息追加到对话历史中
               messages: [...w.messages, finalMsg],
               status: payload.error ? ("error" as const) : ("done" as const),
               error: payload.error || undefined,
@@ -68,7 +79,7 @@ function App() {
               accumulatedContent: "",
             };
           } else {
-            // 流式 chunk，追加到累积内容
+            // 流式 chunk：追加到累积内容
             const newAccumulated = w.accumulatedContent + payload.content;
             // 更新最后一条 assistant 消息（如果存在）
             let realIndex = -1;
@@ -126,26 +137,49 @@ function App() {
 
   const handleSend = async () => {
     if (!message.trim() || !baseURL.trim() || !apiKey.trim()) return;
+    const userMessage = message.trim();
 
-    // 先清空所有窗口并更新状态为 sending
+    // 将用户消息追加到每个窗口的对话历史中
     setWindows((prev) =>
       prev.map((w, i) =>
         i < concurrency
-          ? { ...w, status: "sending" as const, error: undefined, messages: [], accumulatedContent: "" }
+          ? {
+              ...w,
+              status: "sending" as const,
+              error: undefined,
+              accumulatedContent: "",
+              // 将用户消息追加到对话历史中
+              messages: [...w.messages, { role: "user", content: userMessage }],
+            }
           : { ...w, status: "idle" as const, messages: [], accumulatedContent: "" }
       )
     );
 
-    // 调用 Rust 后端并发流式请求
-    await invoke<void>("send_concurrent_request", {
-      config: {
-        base_url: baseURL,
-        api_key: apiKey,
-        model: model,
-        message: message,
-      },
-      concurrency,
-    });
+    // 立即更新 ref，确保后续发送请求时能拿到最新的对话历史
+    windowsRef.current = windowsRef.current.map((w, i) =>
+      i < concurrency
+        ? { ...w, messages: [...w.messages, { role: "user" as const, content: userMessage }] }
+        : w
+    );
+
+    // 清空输入框
+    setMessage("");
+
+    // 为每个活跃的窗口发送请求，带上完整的对话历史（使用 ref 获取最新状态）
+    const activeWindows = windowsRef.current.filter((w) => w.id < concurrency);
+    const promises = activeWindows.map((w) =>
+        invoke<void>("send_concurrent_request", {
+          config: {
+            base_url: baseURL,
+            api_key: apiKey,
+            model: model,
+            // 发送完整的对话历史（user/assistant 交替）
+            messages: w.messages,
+          },
+          concurrency: 1,
+        })
+      );
+    await Promise.all(promises);
   };
 
   const clearAllWindows = () => {

@@ -25,5 +25,13 @@ pub struct LLMRequestConfig {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
-    pub message: String,
+    /// 完整的对话消息历史 (user/assistant 交替)
+    pub messages: Vec<ChatMessage>,
+}
+
+/// 单条聊天消息
+#[derive(Deserialize, Debug, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
 }
