@@ -30,20 +30,30 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![send_concurrent_request])
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
-            let menu = menu::create_menu(app.handle())?;
+            // 创建菜单，同时获取语言菜单项的 Arc 引用
+            let (menu, lang_zh, lang_en) = menu::create_menu(app.handle())?;
             app.set_menu(menu)?;
 
-            // 注册菜单事件处理器：处理语言切换
-            // 注意：必须通过 WebviewWindow::emit 发送事件，
-            // 因为前端 listen 监听的是窗口级事件，而不是应用级事件。
-            app.on_menu_event(|app, event| {
+            // 将语言项的 Arc 引用克隆到闭包中，用于在菜单事件中更新勾选状态
+            let zh_item = lang_zh.item.clone();
+            let en_item = lang_en.item.clone();
+
+            // 注册菜单事件处理器：处理语言切换 + 勾选状态更新
+            app.on_menu_event(move |app, event| {
                 let id = event.id();
                 if *id == "lang-zh" {
-                    // 遍历所有窗口，向每个窗口发送事件
+                    // 选中中文，取消英文勾选
+                    let _ = zh_item.set_checked(true);
+                    let _ = en_item.set_checked(false);
+                    // 通知所有前端窗口切换语言
                     for window in app.webview_windows().values() {
                         let _ = window.emit("language-changed", "zh");
                     }
                 } else if *id == "lang-en" {
+                    // 选中英文，取消中文勾选
+                    let _ = en_item.set_checked(true);
+                    let _ = zh_item.set_checked(false);
+                    // 通知所有前端窗口切换语言
                     for window in app.webview_windows().values() {
                         let _ = window.emit("language-changed", "en");
                     }
