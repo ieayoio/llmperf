@@ -7,6 +7,8 @@ import "./App.css";
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** 思考/推理内容（推理模型特有） */
+  reasoningContent?: string;
 }
 
 /** 单个对话窗口的状态 */
@@ -18,14 +20,18 @@ interface ChatWindow {
   status: "idle" | "sending" | "done" | "error";
   error?: string;
   duration?: number;
-  /** 流式累积内容（尚未成为正式消息） */
+  /** 流式累积正文内容（尚未成为正式消息） */
   accumulatedContent: string;
+  /** 流式累积思考内容（推理模型的 thinking 过程） */
+  accumulatedReasoning: string;
 }
 
 /** 流式 chunk 事件 */
 interface StreamChunkPayload {
   window_id: number;
   content: string;
+  /** 思考/推理内容增量（推理模型特有） */
+  reasoning_content?: string;
   finished: boolean;
   error: string | null;
   duration_ms: number;
@@ -45,6 +51,7 @@ function App() {
       messages: [],
       status: "idle",
       accumulatedContent: "",
+      accumulatedReasoning: "",
     }))
   );
 
@@ -64,25 +71,33 @@ function App() {
           if (w.id !== payload.window_id) return w;
 
           if (payload.finished) {
-            // 最终完成：追加 assistant 消息
-            const finalMsg: ChatMessage = {
+            // 最终完成：追加 assistant 消息（正文 + 思考内容）
+            const assistantMsg: ChatMessage = {
               role: "assistant",
               content: w.accumulatedContent || (payload.error ? `错误: ${payload.error}` : ""),
             };
+            // 如果有思考内容，也保存到消息中
+            if (w.accumulatedReasoning.length > 0) {
+              assistantMsg.reasoningContent = w.accumulatedReasoning;
+            }
             return {
               ...w,
-              messages: [...w.messages, finalMsg],
+              messages: [...w.messages, assistantMsg],
               status: payload.error ? ("error" as const) : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
               accumulatedContent: "",
+              accumulatedReasoning: "",
             };
           } else {
-            // 流式 chunk：只累积内容，UI 通过 accumulatedContent 直接展示
+            // 流式 chunk：分别累积正文和思考内容
             const newAccumulated = w.accumulatedContent + payload.content;
+            const newAccumulatedReasoning =
+              (w.accumulatedReasoning || "") + (payload.reasoning_content || "");
             return {
               ...w,
               accumulatedContent: newAccumulated,
+              accumulatedReasoning: newAccumulatedReasoning,
               status: "sending" as const,
             };
           }
@@ -111,6 +126,7 @@ function App() {
           messages: [],
           status: "idle" as const,
           accumulatedContent: "",
+          accumulatedReasoning: "",
         })
       );
       return [...prev, ...added];
@@ -126,7 +142,7 @@ function App() {
       setWindows((prev) => {
         const updated = prev.map((w, i) =>
           i < concurrency
-            ? { ...w, messages: [...w.messages, { role: "user" as const, content: userMessage }], status: "sending" as const, accumulatedContent: "" }
+            ? { ...w, messages: [...w.messages, { role: "user" as const, content: userMessage }], status: "sending" as const, accumulatedContent: "", accumulatedReasoning: "" }
             : w
         );
         const active = updated.filter((w) => w.id < concurrency);
@@ -164,6 +180,7 @@ function App() {
         error: undefined,
         duration: undefined,
         accumulatedContent: "",
+        accumulatedReasoning: "",
       }))
     );
   };
@@ -259,7 +276,8 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
       case "idle":
         return "⏸ 空闲";
       case "sending":
-        return `⏳ 发送中... (${win.accumulatedContent.length} 字符)`;
+        return `⏳ 发送中... (正文 ${win.accumulatedContent.length} 字符` +
+          (win.accumulatedReasoning.length > 0 ? `, 思考 ${win.accumulatedReasoning.length} 字符)` : ")");
       case "done":
         return `✅ 完成 (${win.duration}ms)`;
       case "error":
@@ -286,9 +304,26 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
             <div className="chat-msg-label">
               {msg.role === "user" ? "👤 你" : "🤖 模型"}
             </div>
+            {/* 已完成的思考过程（显示在正文上方） */}
+            {msg.reasoningContent && (
+              <details className="reasoning-details">
+                <summary className="reasoning-summary">💭 思考过程</summary>
+                <div className="reasoning-content-text">{msg.reasoningContent}</div>
+              </details>
+            )}
             <div className="chat-msg-content">{msg.content}</div>
           </div>
         ))}
+        {/* 流式输出中的思考过程（推理模型的 thinking，显示在正文上方） */}
+        {win.status === "sending" && win.accumulatedReasoning.length > 0 && (
+          <div className="chat-msg assistant reasoning-streaming">
+            <div className="chat-msg-label">💭 思考过程</div>
+            <div className="chat-msg-content reasoning-content">
+              {win.accumulatedReasoning}
+              <span className="streaming-cursor">▌</span>
+            </div>
+          </div>
+        )}
         {/* 流式输出中的累积内容（尚未成为正式消息） */}
         {win.status === "sending" && win.accumulatedContent.length > 0 && (
           <div className="chat-msg assistant streaming">

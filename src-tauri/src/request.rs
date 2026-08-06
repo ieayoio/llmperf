@@ -12,13 +12,14 @@ fn emit_error(
     let _ = app.emit("stream_chunk", StreamChunkEvent {
         window_id,
         content: String::new(),
+        reasoning_content: None,
         finished: true,
         error: Some(error),
         duration_ms: start.elapsed().as_millis(),
     });
 }
 
-/// 发送流式 chunk 到前端
+/// 发送正文流式 chunk 到前端
 fn emit_chunk(
     app: &tauri::AppHandle,
     window_id: usize,
@@ -28,6 +29,24 @@ fn emit_chunk(
     let _ = app.emit("stream_chunk", StreamChunkEvent {
         window_id,
         content: chunk.to_string(),
+        reasoning_content: None,
+        finished: false,
+        error: None,
+        duration_ms: start.elapsed().as_millis(),
+    });
+}
+
+/// 发送思考内容流式 chunk 到前端
+fn emit_reasoning_chunk(
+    app: &tauri::AppHandle,
+    window_id: usize,
+    start: std::time::Instant,
+    chunk: &str,
+) {
+    let _ = app.emit("stream_chunk", StreamChunkEvent {
+        window_id,
+        content: String::new(),
+        reasoning_content: Some(chunk.to_string()),
         finished: false,
         error: None,
         duration_ms: start.elapsed().as_millis(),
@@ -43,6 +62,7 @@ fn emit_finished(
     let _ = app.emit("stream_chunk", StreamChunkEvent {
         window_id,
         content: String::new(),
+        reasoning_content: None,
         finished: true,
         error: None,
         duration_ms: start.elapsed().as_millis(),
@@ -94,6 +114,7 @@ pub async fn execute_stream_request(
             return SingleResult {
                 window_id,
                 assistant_content: String::new(),
+                reasoning_content: None,
                 duration_ms: start.elapsed().as_millis(),
                 error: Some(error_msg),
             };
@@ -118,6 +139,7 @@ pub async fn execute_stream_request(
             return SingleResult {
                 window_id,
                 assistant_content: String::new(),
+                reasoning_content: None,
                 duration_ms: start.elapsed().as_millis(),
                 error: Some(error_msg),
             };
@@ -125,20 +147,24 @@ pub async fn execute_stream_request(
     };
 
     // 6. 逐事件处理流式响应
-    let mut accumulated = String::new();
+    let mut accumulated_content = String::new();
+    let mut accumulated_reasoning = String::new();
     let mut last_error: Option<String> = None;
 
     while let Some(event_result) = rx.recv().await {
         match event_result {
             Ok(event) => match event {
                 StreamEvent::ReasoningDelta(s) => {
-                    // 推理模型的思考内容（可选，不推送给前端）
-                    accumulated.push_str(&s);
+                    // 推理模型的思考内容，推送给前端展示
+                    if !s.is_empty() {
+                        accumulated_reasoning.push_str(&s);
+                        emit_reasoning_chunk(&app, window_id, start, &s);
+                    }
                 }
                 StreamEvent::ContentDelta(s) => {
                     // 正文回复内容，推送给前端
                     if !s.is_empty() {
-                        accumulated.push_str(&s);
+                        accumulated_content.push_str(&s);
                         emit_chunk(&app, window_id, start, &s);
                     }
                 }
@@ -160,8 +186,9 @@ pub async fn execute_stream_request(
     // 8. 返回聚合结果
     SingleResult {
         window_id,
-        assistant_content: accumulated,
+        assistant_content: accumulated_content,
         duration_ms: start.elapsed().as_millis(),
         error: last_error,
+        reasoning_content: Some(accumulated_reasoning),
     }
 }

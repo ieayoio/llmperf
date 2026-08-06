@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct SingleResult {
     pub window_id: usize,
     pub assistant_content: String,
+    /// 思考/推理内容（推理模型会返回）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     pub duration_ms: u128,
     pub error: Option<String>,
 }
@@ -13,7 +16,11 @@ pub struct SingleResult {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StreamChunkEvent {
     pub window_id: usize,
+    /// 正文回复增量（非空时表示此事件为正文内容）
     pub content: String,
+    /// 思考/推理内容增量（非空时表示此事件为思考过程）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     pub finished: bool,
     pub error: Option<String>,
     pub duration_ms: u128,

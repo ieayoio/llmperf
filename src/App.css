@@ -260,6 +260,103 @@ html, body, #root {
   border-bottom-left-radius: 4px;
 }
 
+/* 思考过程样式 - 半透明背景 + 左侧装饰条 */
+.chat-msg.reasoning-streaming {
+  align-self: flex-start;
+  background: rgba(124, 58, 237, 0.08);
+  border: 1px dashed rgba(124, 58, 237, 0.3);
+  color: #a0aec0;
+  border-bottom-left-radius: 4px;
+  font-size: 12px;
+  max-width: 95%;
+}
+
+.chat-msg.reasoning-streaming .chat-msg-label {
+  color: #a78bfa;
+  font-size: 11px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 思考内容正文区域 - 带折叠效果 */
+.chat-msg-content.reasoning-content {
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: #94a3b8;
+  font-size: 12px;
+  padding-left: 4px;
+}
+
+/* 思考内容滚动条 */
+.chat-msg-content.reasoning-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.chat-msg-content.reasoning-content::-webkit-scrollbar-thumb {
+  background: rgba(124, 58, 237, 0.3);
+  border-radius: 2px;
+}
+
+.chat-msg-content.reasoning-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(124, 58, 237, 0.5);
+}
+
+/* ====== 已完成的思考过程（折叠面板） ====== */
+.reasoning-details {
+  margin-top: 8px;
+  border-top: 1px solid rgba(124, 58, 237, 0.2);
+  padding-top: 4px;
+}
+
+.reasoning-summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: #a78bfa;
+  list-style: none;
+  user-select: none;
+  padding: 2px 0;
+}
+
+.reasoning-summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning-summary::before {
+  content: "▸ ";
+  font-size: 10px;
+}
+
+.reasoning-details[open] > .reasoning-summary::before {
+  content: "▾ ";
+}
+
+/* 折叠面板内容 */
+.reasoning-details > .reasoning-content-text {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  padding: 6px 8px;
+  margin: 4px 0 0 12px;
+  background: rgba(124, 58, 237, 0.05);
+  border-radius: 6px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.reasoning-details > .reasoning-content-text::-webkit-scrollbar {
+  width: 4px;
+}
+
+.reasoning-details > .reasoning-content-text::-webkit-scrollbar-thumb {
+  background: rgba(124, 58, 237, 0.3);
+  border-radius: 2px;
+}
+
 .chat-msg-label {
   font-size: 11px;
   color: #888;
