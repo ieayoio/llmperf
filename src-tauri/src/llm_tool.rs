@@ -330,7 +330,10 @@ pub enum StreamEvent {
 }
 
 /// 流式结果聚合器：将零散的流式事件累积为完整结果
+///
+/// > 注：当前非流式接口已可直接获取完整内容，该结构体为后续流式结果聚合预留。
 #[derive(Debug, Default, Clone)]
+#[allow(dead_code)]
 pub struct StreamAccumulator {
     /// 累积的思考内容
     pub reasoning_content: String,
@@ -344,6 +347,7 @@ pub struct StreamAccumulator {
 
 impl StreamAccumulator {
     /// 喂入一个流式事件，自动累积到对应字段
+    #[allow(dead_code)]
     pub fn feed(&mut self, event: &StreamEvent) {
         match event {
             StreamEvent::ReasoningDelta(s) => self.reasoning_content.push_str(s),
