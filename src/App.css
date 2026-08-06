@@ -180,6 +180,8 @@ html, body, #root {
   border-radius: 8px;
   overflow: hidden;
   transition: border-color 0.3s;
+  /* 最小高度：防止高并发时窗口被网格压没 */
+  min-height: 180px;
 }
 
 .chat-window.status-sending,
