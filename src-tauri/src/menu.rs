@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use tauri::{
-    menu::{CheckMenuItem, Menu, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     AppHandle, Runtime,
 };
 
@@ -78,12 +78,29 @@ pub fn create_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(Menu<R>, La
         &[&*lang_zh, &*lang_en],
     )?;
 
-    // === 窗口菜单 ===
+    // === 窗口菜单：最小化、最大化/还原、关闭 ===
+    // 使用自定义 MenuItem，在 on_menu_event 中手动调用窗口方法
+    // （PredefinedMenuItem 的窗口操作用法在 Linux 上 Unsupported）
+    let win_minimize = MenuItem::with_id(
+        app, "win-minimize".to_string(), "最小化", true, None::<String>,
+    )?;
+    let win_maximize = MenuItem::with_id(
+        app, "win-maximize".to_string(), "最大化", true, None::<String>,
+    )?;
+    let win_close = MenuItem::with_id(
+        app, "win-close".to_string(), "关闭窗口", true, None::<String>,
+    )?;
+
     let window_menu = Submenu::with_items(
         app,
         "窗口",
         true,
-        &[&PredefinedMenuItem::minimize(app, None)?],
+        &[
+            &win_minimize,
+            &win_maximize,
+            &PredefinedMenuItem::separator(app)?,
+            &win_close,
+        ],
     )?;
 
     // 构建主菜单

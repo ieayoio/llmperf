@@ -38,9 +38,11 @@ pub fn run() {
             let zh_item = lang_zh.item.clone();
             let en_item = lang_en.item.clone();
 
-            // 注册菜单事件处理器：处理语言切换 + 勾选状态更新
+            // 注册菜单事件处理器：处理语言切换 + 窗口操作 + 勾选状态更新
             app.on_menu_event(move |app, event| {
                 let id = event.id();
+                
+                // === 语言切换 ===
                 if *id == "lang-zh" {
                     // 选中中文，取消英文勾选
                     let _ = zh_item.set_checked(true);
@@ -56,6 +58,27 @@ pub fn run() {
                     // 通知所有前端窗口切换语言
                     for window in app.webview_windows().values() {
                         let _ = window.emit("language-changed", "en");
+                    }
+                }
+                // === 窗口操作 ===
+                else if *id == "win-minimize" {
+                    // 最小化所有窗口
+                    for window in app.webview_windows().values() {
+                        let _ = window.minimize();
+                    }
+                } else if *id == "win-maximize" {
+                    // 最大化/还原所有窗口
+                    for window in app.webview_windows().values() {
+                        if window.is_maximized().unwrap_or(false) {
+                            let _ = window.unmaximize();
+                        } else {
+                            let _ = window.maximize();
+                        }
+                    }
+                } else if *id == "win-close" {
+                    // 关闭所有窗口
+                    for window in app.webview_windows().values() {
+                        let _ = window.close();
                     }
                 }
             });
