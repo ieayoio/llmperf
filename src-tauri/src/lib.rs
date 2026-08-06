@@ -5,7 +5,7 @@ mod concurrent;
 mod llm_tool;
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
-pub use llm_tool::*;
+pub use llm_tool::{LlmClient, ClientConfig, ChatMessage, ChatParams, ChatCompletion, Role, StreamEvent};
 
 /// Tauri 命令：并发发送 LLM 请求
 ///
