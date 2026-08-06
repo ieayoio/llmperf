@@ -27,6 +27,8 @@ pub struct LLMRequestConfig {
     pub model: String,
     /// 完整的对话消息历史 (user/assistant 交替)
     pub messages: Vec<ChatMessage>,
+    /// 窗口标识，用于区分不同窗口的流式事件
+    pub window_id: usize,
 }
 
 /// 单条聊天消息

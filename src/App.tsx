@@ -175,6 +175,8 @@ function App() {
             model: model,
             // 发送完整的对话历史（user/assistant 交替）
             messages: w.messages,
+            // 传递窗口 ID，确保流式事件发送到正确的窗口
+            window_id: w.id,
           },
           concurrency: 1,
         })
