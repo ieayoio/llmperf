@@ -2,8 +2,10 @@
 mod types;
 mod request;
 mod concurrent;
+mod llm_tool;
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
+pub use llm_tool::*;
 
 /// Tauri 命令：并发发送 LLM 请求
 ///
