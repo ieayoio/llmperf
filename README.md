@@ -69,6 +69,9 @@ npm run tauri dev
 ```bash
 # 构建前端 + Rust 后端
 npm run build
+
+# 构建linux版本
+npm run tauri build -- --target x86_64-unknown-linux-gnu
 ```
 
 构建产物位于 `src-tauri/target/release/bundle/` 目录下，具体取决于目标平台：
