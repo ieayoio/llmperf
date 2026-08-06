@@ -28,8 +28,17 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 12px;
-  gap: 12px;
+  padding: 0 12px 12px 12px;
+  gap: 0;
+}
+
+/* ====== 顶部菜单栏 ====== */
+.top-menu {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+  flex-shrink: 0;
+  gap: 8px;
 }
 
 /* ====== 配置面板 ====== */

@@ -1,7 +1,11 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { initI18n, t, getCurrentLanguage, setLanguage } from "./i18n";
 import "./App.css";
+
+// 初始化国际化（从 localStorage 加载语言设置）
+initI18n();
 
 /** 单条聊天消息 */
 interface ChatMessage {
@@ -44,6 +48,9 @@ function App() {
   const [concurrency, setConcurrency] = useState(1);
   const [message, setMessage] = useState("");
 
+  // 当前语言状态（用于触发 UI 重新渲染）
+  const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
+
   // 窗口状态：每个窗口维护自己的对话历史
   const [windows, setWindows] = useState<ChatWindow[]>(() =>
     Array.from({ length: 4 }, (_, i) => ({
@@ -58,6 +65,17 @@ function App() {
   // 用 ref 始终持有最新的窗口状态，避免 handleSend 中的闭包过时问题
   const windowsRef = useRef<ChatWindow[]>(windows);
   windowsRef.current = windows;
+
+  // 监听 Tauri 原生菜单的语言切换事件
+  useEffect(() => {
+    const unlisten = listen<string>("language-changed", (event) => {
+      setLanguage(event.payload);
+      setCurrentLang(getCurrentLanguage());
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // 监听流式事件
   useEffect(() => {
@@ -187,36 +205,39 @@ function App() {
 
   return (
     <div className="app-container">
+      {/* 使用 currentLang 触发语言切换时的重新渲染 */}
+      <div style={{ display: "none" }} aria-hidden="true" key={currentLang}></div>
+
       {/* ====== 顶部配置栏 ====== */}
       <div className="config-panel">
-        <h1 className="app-title">⚡ LLM 并发测试工具</h1>
+        <h1 className="app-title">{t("app.title")}</h1>
 
         <div className="config-row">
           <div className="config-field">
-            <label>Base URL</label>
+            <label>{t("config.baseURL")}</label>
             <input
               type="text"
-              placeholder="http://127.0.0.1:16777/v1"
+              placeholder={t("config.baseURLPlaceholder")}
               value={baseURL}
               onChange={(e) => setBaseURL(e.target.value)}
             />
           </div>
 
           <div className="config-field">
-            <label>API Key</label>
+            <label>{t("config.apiKey")}</label>
             <input
               type="password"
-              placeholder="sk-..."
+              placeholder={t("config.apiKeyPlaceholder")}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
             />
           </div>
 
           <div className="config-field">
-            <label>Model</label>
+            <label>{t("config.model")}</label>
             <input
               type="text"
-              placeholder="gpt-3.5-turbo"
+              placeholder={t("config.modelPlaceholder")}
               value={model}
               onChange={(e) => setModel(e.target.value)}
             />
@@ -225,7 +246,7 @@ function App() {
 
         <div className="config-row">
           <div className="config-field">
-            <label>并发数</label>
+            <label>{t("config.concurrency")}</label>
             <input
               type="number"
               min={1}
@@ -236,10 +257,10 @@ function App() {
           </div>
 
           <div className="config-field flex-1">
-            <label>发送消息</label>
+            <label>{t("config.sendMessage")}</label>
             <input
               type="text"
-              placeholder="输入要测试的消息 (Enter 发送)"
+              placeholder={t("config.messagePlaceholder")}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
@@ -250,10 +271,10 @@ function App() {
 
           <div className="config-actions">
             <button className="btn btn-primary" onClick={handleSend}>
-              🚀 发送
+              {t("config.send")}
             </button>
             <button className="btn btn-secondary" onClick={clearAllWindows}>
-              🗑 清空
+              {t("config.clear")}
             </button>
           </div>
         </div>
@@ -272,29 +293,34 @@ function App() {
 /* ====== 单个聊天窗口组件 ====== */
 function ChatWindow({ window: win }: { window: ChatWindow }) {
   const statusLabel = () => {
+    const contentLen = win.accumulatedContent.length;
+    const reasoningLen = win.accumulatedReasoning.length;
     switch (win.status) {
       case "idle":
-        return "⏸ 空闲";
+        return t("status.idle");
       case "sending":
-        return `⏳ 发送中... (正文 ${win.accumulatedContent.length} 字符` +
-          (win.accumulatedReasoning.length > 0 ? `, 思考 ${win.accumulatedReasoning.length} 字符)` : ")");
+        // 处理带变量的状态文本
+        if (reasoningLen > 0) {
+          return t("status.sending_with_reasoning", contentLen, reasoningLen);
+        }
+        return t("status.sending", contentLen);
       case "done":
-        return `✅ 完成 (${win.duration}ms)`;
+        return t("status.done", win.duration ?? 0);
       case "error":
-        return `❌ ${win.duration ?? 0}ms`;
+        return t("status.error", win.duration ?? 0);
     }
   };
 
   return (
     <div className={`chat-window status-${win.status}`}>
       <div className="chat-header">
-        <span className="chat-window-title">窗口 {win.id + 1}</span>
+        <span className="chat-window-title">{t("chat.window", win.id + 1)}</span>
         <span className="chat-status">{statusLabel()}</span>
       </div>
 
       <div className="chat-messages">
         {win.messages.length === 0 && win.accumulatedContent.length === 0 && win.status === "idle" && (
-          <div className="chat-empty">等待发送...</div>
+          <div className="chat-empty">{t("chat.empty")}</div>
         )}
         {win.messages.map((msg, i) => (
           <div
@@ -302,12 +328,12 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
             className={`chat-msg ${msg.role === "user" ? "user" : "assistant"}`}
           >
             <div className="chat-msg-label">
-              {msg.role === "user" ? "👤 你" : "🤖 模型"}
+              {msg.role === "user" ? t("chat.user") : t("chat.assistant")}
             </div>
             {/* 已完成的思考过程（显示在正文上方） */}
             {msg.reasoningContent && (
               <details className="reasoning-details">
-                <summary className="reasoning-summary">💭 思考过程</summary>
+                <summary className="reasoning-summary">{t("chat.reasoningSummary")}</summary>
                 <div className="reasoning-content-text">{msg.reasoningContent}</div>
               </details>
             )}
@@ -317,7 +343,7 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
         {/* 流式输出中的思考过程（推理模型的 thinking，显示在正文上方） */}
         {win.status === "sending" && win.accumulatedReasoning.length > 0 && (
           <div className="chat-msg assistant reasoning-streaming">
-            <div className="chat-msg-label">💭 思考过程</div>
+            <div className="chat-msg-label">{t("chat.reasoning")}</div>
             <div className="chat-msg-content reasoning-content">
               {win.accumulatedReasoning}
               <span className="streaming-cursor">▌</span>
@@ -327,7 +353,7 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
         {/* 流式输出中的累积内容（尚未成为正式消息） */}
         {win.status === "sending" && win.accumulatedContent.length > 0 && (
           <div className="chat-msg assistant streaming">
-            <div className="chat-msg-label">🤖 模型</div>
+            <div className="chat-msg-label">{t("chat.assistant")}</div>
             <div className="chat-msg-content">
               {win.accumulatedContent}
               <span className="streaming-cursor">▌</span>
@@ -336,7 +362,7 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
         )}
         {win.status === "error" && win.error && (
           <div className="chat-error">
-            <strong>错误:</strong> {win.error}
+            <strong>{t("chat.error")}</strong> {win.error}
           </div>
         )}
       </div>

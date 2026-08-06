@@ -1,0 +1,42 @@
+{
+  "app": {
+    "title": "⚡ LLM Concurrency Tester"
+  },
+  "config": {
+    "baseURL": "Base URL",
+    "baseURLPlaceholder": "http://127.0.0.1:16777/v1",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "sk-...",
+    "model": "Model",
+    "modelPlaceholder": "gpt-3.5-turbo",
+    "concurrency": "Concurrency",
+    "sendMessage": "Message",
+    "messagePlaceholder": "Enter test message (Enter to send)",
+    "send": "🚀 Send",
+    "clear": "🗑 Clear"
+  },
+  "status": {
+    "idle": "⏸ Idle",
+    "sending": "⏳ Sending... (content {0} chars)",
+    "sending_with_reasoning": "⏳ Sending... (content {0} chars, reasoning {1} chars)",
+    "done": "✅ Done ({0}ms)",
+    "error": "❌ {0}ms",
+    "content": "content",
+    "reasoning": "reasoning"
+  },
+  "chat": {
+    "window": "Window {0}",
+    "empty": "Waiting to send...",
+    "user": "👤 You",
+    "assistant": "🤖 Bot",
+    "reasoning": "💭 Thinking",
+    "error": "Error:",
+    "reasoningSummary": "💭 Thinking Process"
+  },
+  "language": {
+    "label": "Language",
+    "zh": "中文",
+    "en": "English",
+    "menu": "Language"
+  }
+}

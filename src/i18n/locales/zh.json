@@ -1,0 +1,42 @@
+{
+  "app": {
+    "title": "⚡ LLM 并发测试工具"
+  },
+  "config": {
+    "baseURL": "Base URL",
+    "baseURLPlaceholder": "http://127.0.0.1:16777/v1",
+    "apiKey": "API Key",
+    "apiKeyPlaceholder": "sk-...",
+    "model": "Model",
+    "modelPlaceholder": "gpt-3.5-turbo",
+    "concurrency": "并发数",
+    "sendMessage": "发送消息",
+    "messagePlaceholder": "输入要测试的消息 (Enter 发送)",
+    "send": "🚀 发送",
+    "clear": "🗑 清空"
+  },
+  "status": {
+    "idle": "⏸ 空闲",
+    "sending": "⏳ 发送中... (正文 {0} 字符)",
+    "sending_with_reasoning": "⏳ 发送中... (正文 {0} 字符, 思考 {1} 字符)",
+    "done": "✅ 完成 ({0}ms)",
+    "error": "❌ {0}ms",
+    "content": "正文",
+    "reasoning": "思考"
+  },
+  "chat": {
+    "window": "窗口 {0}",
+    "empty": "等待发送...",
+    "user": "👤 你",
+    "assistant": "🤖 模型",
+    "reasoning": "💭 思考过程",
+    "error": "错误:",
+    "reasoningSummary": "💭 思考过程"
+  },
+  "language": {
+    "label": "语言",
+    "zh": "中文",
+    "en": "English",
+    "menu": "语言"
+  }
+}
