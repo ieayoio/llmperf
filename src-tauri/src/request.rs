@@ -1,4 +1,4 @@
-use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent};
+use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent, FinishInfo};
 use crate::types::{LLMRequestConfig, SingleResult, StreamChunkEvent};
 use tauri::Emitter;
 
@@ -116,6 +116,8 @@ pub async fn execute_stream_request(
                 assistant_content: String::new(),
                 reasoning_content: None,
                 duration_ms: start.elapsed().as_millis(),
+                completion_tokens_per_second: None,
+                prompt_tokens_per_second: None,
                 error: Some(error_msg),
             };
         }
@@ -141,6 +143,8 @@ pub async fn execute_stream_request(
                 assistant_content: String::new(),
                 reasoning_content: None,
                 duration_ms: start.elapsed().as_millis(),
+                completion_tokens_per_second: None,
+                prompt_tokens_per_second: None,
                 error: Some(error_msg),
             };
         }
@@ -150,6 +154,7 @@ pub async fn execute_stream_request(
     let mut accumulated_content = String::new();
     let mut accumulated_reasoning = String::new();
     let mut last_error: Option<String> = None;
+    let mut finish_info: Option<FinishInfo> = None;
 
     while let Some(event_result) = rx.recv().await {
         match event_result {
@@ -168,8 +173,9 @@ pub async fn execute_stream_request(
                         emit_chunk(&app, window_id, start, &s);
                     }
                 }
-                StreamEvent::Finish(_info) => {
+                StreamEvent::Finish(info) => {
                     // 流结束，不再处理后续事件
+                    finish_info = Some(info);
                     break;
                 }
             },
@@ -183,11 +189,33 @@ pub async fn execute_stream_request(
     // 7. 发送完成事件
     emit_finished(&app, window_id, start);
 
-    // 8. 返回聚合结果
+    // 8. 计算 token 速度（优先从 FinishInfo.usage 反推，无 usage 则为 None）
+    let duration_ms = start.elapsed().as_millis();
+    let (completion_tps, prompt_tps) = finish_info
+        .as_ref()
+        .and_then(|info| info.usage.as_ref())
+        .map(|usage| {
+            let completion_tps = if usage.completion_tokens > 0 && duration_ms > 0 {
+                Some(usage.completion_tokens as f64 / (duration_ms as f64 / 1000.0))
+            } else {
+                None
+            };
+            let prompt_tps = if usage.prompt_tokens > 0 && duration_ms > 0 {
+                Some(usage.prompt_tokens as f64 / (duration_ms as f64 / 1000.0))
+            } else {
+                None
+            };
+            (completion_tps, prompt_tps)
+        })
+        .unwrap_or((None, None));
+
+    // 9. 返回聚合结果
     SingleResult {
         window_id,
         assistant_content: accumulated_content,
-        duration_ms: start.elapsed().as_millis(),
+        duration_ms,
+        completion_tokens_per_second: completion_tps,
+        prompt_tokens_per_second: prompt_tps,
         error: last_error,
         reasoning_content: Some(accumulated_reasoning),
     }

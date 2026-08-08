@@ -218,6 +218,78 @@ pub struct Usage {
     pub total_tokens: u64,
 }
 
+/// Token 生成速度统计（来自部分 API 的 `timings` 字段，如 vLLM）
+///
+/// # 参考示例
+/// 参考1（vLLM）返回的 timings 字段：
+/// ```json
+/// "timings": {
+///   "prompt_n": 11,
+///   "prompt_ms": 286.864,
+///   "prompt_per_token_ms": 26.078545454545452,
+///   "prompt_per_second": 38.34569691561158,
+///   "predicted_n": 485,
+///   "predicted_ms": 11568.86,
+///   "predicted_per_token_ms": 23.853319587628867,
+///   "predicted_per_second": 41.92288609249312
+/// }
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Timings {
+    /// Prompt 阶段消耗的 token 数
+    #[serde(default)]
+    pub prompt_n: u64,
+    /// Prompt 阶段耗时（毫秒）
+    #[serde(default)]
+    pub prompt_ms: f64,
+    /// 每个 prompt token 平均耗时（毫秒）
+    #[serde(default)]
+    pub prompt_per_token_ms: f64,
+    /// Prompt 阶段 token 速度（每秒 token 数）
+    #[serde(default)]
+    pub prompt_per_second: f64,
+    /// 预测（补全）阶段生成的 token 数
+    #[serde(default)]
+    pub predicted_n: u64,
+    /// 预测（补全）阶段耗时（毫秒）
+    #[serde(default)]
+    pub predicted_ms: f64,
+    /// 每个补全 token 平均耗时（毫秒）
+    #[serde(default)]
+    pub predicted_per_token_ms: f64,
+    /// 预测（补全）阶段 token 速度（每秒 token 数）
+    #[serde(default)]
+    pub predicted_per_second: f64,
+}
+
+impl Timings {
+    /// 获取补全阶段的 token 速度（每秒 token 数）
+    ///
+    /// 优先返回 `predicted_per_second`，若为空则尝试计算 `completion_tokens / (predicted_ms / 1000.0)`
+    pub fn completion_tokens_per_second(&self) -> Option<f64> {
+        if self.predicted_per_second > 0.0 {
+            return Some(self.predicted_per_second);
+        }
+        if self.predicted_ms > 0.0 {
+            let seconds = self.predicted_ms / 1000.0;
+            return Some(self.predicted_n as f64 / seconds);
+        }
+        None
+    }
+
+    /// 获取 Prompt 阶段的 token 速度（每秒 token 数）
+    pub fn prompt_tokens_per_second(&self) -> Option<f64> {
+        if self.prompt_per_second > 0.0 {
+            return Some(self.prompt_per_second);
+        }
+        if self.prompt_ms > 0.0 {
+            let seconds = self.prompt_ms / 1000.0;
+            return Some(self.prompt_n as f64 / seconds);
+        }
+        None
+    }
+}
+
 /// 非流式完整响应
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletion {
@@ -229,6 +301,9 @@ pub struct ChatCompletion {
     pub choices: Vec<Choice>,
     /// Token 使用量统计
     pub usage: Option<Usage>,
+    /// Token 生成速度统计（部分 API 如 vLLM 会返回）
+    #[serde(default)]
+    pub timings: Option<Timings>,
 }
 
 /// 单个生成结果
@@ -285,6 +360,68 @@ impl ChatCompletion {
     /// 获取结束原因
     pub fn finish_reason(&self) -> Option<&str> {
         self.choices.first().and_then(|c| c.finish_reason.as_deref())
+    }
+
+    /// 获取补全阶段的 token 速度（每秒 token 数）
+    ///
+    /// 优先从 `timings.predicted_per_second` 获取，若为空则尝试从 `usage` 和响应时间计算。
+    /// 注意：当前实现仅从 timings 获取，响应时间计算需要调用方传入请求耗时。
+    pub fn completion_tokens_per_second(&self) -> Option<f64> {
+        self.timings
+            .as_ref()
+            .and_then(|t| t.completion_tokens_per_second())
+    }
+
+    /// 获取 Prompt 阶段的 token 速度（每秒 token 数）
+    pub fn prompt_tokens_per_second(&self) -> Option<f64> {
+        self.timings
+            .as_ref()
+            .and_then(|t| t.prompt_tokens_per_second())
+    }
+
+    /// 计算补全阶段的 token 速度（每秒 token 数），兼容无 `timings` 字段的 API
+    ///
+    /// 优先级：
+    /// 1. 若 `timings` 存在，直接使用 `timings.predicted_per_second`
+    /// 2. 否则用 `usage.completion_tokens` 除以 `duration_ms` 反推速度
+    ///
+    /// # 参数
+    /// - `duration_ms`: 请求总耗时（毫秒），通常为从发起请求到收到最后一个 chunk 的时间
+    ///
+    /// # 示例
+    /// ```rust,no_run
+    /// # use llmperf_lib::*;
+    /// let completion: ChatCompletion = /* ... */;
+    /// let duration_ms = 1500u128; // 1.5 秒
+    /// let tps = completion.completion_tokens_per_second_with_duration(duration_ms);
+    /// ```
+    pub fn completion_tokens_per_second_with_duration(&self, duration_ms: u128) -> Option<f64> {
+        // 优先从 timings 获取（若 API 支持）
+        if let Some(tps) = self.completion_tokens_per_second() {
+            return Some(tps);
+        }
+        // 降级：用 usage 反推
+        let usage = self.usage.as_ref()?;
+        if usage.completion_tokens == 0 || duration_ms == 0 {
+            return None;
+        }
+        let duration_s = duration_ms as f64 / 1000.0;
+        Some(usage.completion_tokens as f64 / duration_s)
+    }
+
+    /// 计算 Prompt 阶段的 token 速度（每秒 token 数），兼容无 `timings` 字段的 API
+    ///
+    /// 同 `completion_tokens_per_second_with_duration`，优先使用 timings，否则反推。
+    pub fn prompt_tokens_per_second_with_duration(&self, duration_ms: u128) -> Option<f64> {
+        if let Some(tps) = self.prompt_tokens_per_second() {
+            return Some(tps);
+        }
+        let usage = self.usage.as_ref()?;
+        if usage.prompt_tokens == 0 || duration_ms == 0 {
+            return None;
+        }
+        let duration_s = duration_ms as f64 / 1000.0;
+        Some(usage.prompt_tokens as f64 / duration_s)
     }
 }
 
@@ -794,5 +931,174 @@ mod tests {
         let config = ClientConfig::default();
         assert_eq!(config.base_url, "https://api.openai.com/v1");
         assert_eq!(config.timeout_secs, 120);
+    }
+
+    /// 测试带 timings 字段的响应解析（参考1：vLLM）
+    #[test]
+    fn test_chat_completion_with_timings() {
+        let json = r#"{
+            "id": "chatcmpl-6qSiIfas6wiYClQeG0o4AuGedbcHVfAe",
+            "object": "chat.completion",
+            "created": 1786156635,
+            "model": "myllm",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "你好！我是通义千问...",
+                    "reasoning_content": "Thinking Process:\n\n1. Analyze..."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "completion_tokens": 485,
+                "prompt_tokens": 11,
+                "total_tokens": 496,
+                "prompt_tokens_details": {
+                    "cached_tokens": 0
+                }
+            },
+            "timings": {
+                "cache_n": 0,
+                "prompt_n": 11,
+                "prompt_ms": 286.864,
+                "prompt_per_token_ms": 26.078545454545452,
+                "prompt_per_second": 38.34569691561158,
+                "predicted_n": 485,
+                "predicted_ms": 11568.86,
+                "predicted_per_token_ms": 23.853319587628867,
+                "predicted_per_second": 41.92288609249312
+            }
+        }"#;
+
+        let completion: ChatCompletion = serde_json::from_str(json).unwrap();
+        assert_eq!(completion.content(), "你好！我是通义千问...");
+        assert!(completion.timings.is_some());
+
+        let timings = completion.timings.as_ref().unwrap();
+        assert_eq!(timings.prompt_n, 11);
+        assert_eq!(timings.predicted_n, 485);
+        assert!((timings.prompt_per_second - 38.34569691561158).abs() < 0.0001);
+        assert!((timings.predicted_per_second - 41.92288609249312).abs() < 0.0001);
+
+        // 测试 token 速度获取
+        assert!(completion.completion_tokens_per_second().is_some());
+        assert!((completion.completion_tokens_per_second().unwrap() - 41.92288609249312).abs() < 0.0001);
+        assert!(completion.prompt_tokens_per_second().is_some());
+        assert!((completion.prompt_tokens_per_second().unwrap() - 38.34569691561158).abs() < 0.0001);
+    }
+
+    /// 测试不带 timings 字段的响应解析（参考2：无 timings 的 vLLM）
+    #[test]
+    fn test_chat_completion_without_timings() {
+        let json = r#"{
+            "id": "chatcmpl-9d2c5c11edc1e071",
+            "object": "chat.completion",
+            "created": 1786084098,
+            "model": "LLM-AI-HEAT",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "\n\n你好！有什么我可以帮你的吗？",
+                    "reasoning": "Here's a thinking process..."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "total_tokens": 223,
+                "completion_tokens": 212,
+                "prompt_tokens_details": null
+            }
+        }"#;
+
+        let completion: ChatCompletion = serde_json::from_str(json).unwrap();
+        assert_eq!(completion.content(), "\n\n你好！有什么我可以帮你的吗？");
+        // 没有 timings 字段，应该默认为 None
+        assert!(completion.timings.is_none());
+        assert!(completion.completion_tokens_per_second().is_none());
+        assert!(completion.prompt_tokens_per_second().is_none());
+    }
+
+    /// 测试 Timings 结构体的 token 速度计算方法
+    #[test]
+    fn test_timings_calculation() {
+        // 有 predicted_per_second 时直接返回
+        let timings = Timings {
+            prompt_n: 10,
+            prompt_ms: 100.0,
+            prompt_per_token_ms: 10.0,
+            prompt_per_second: 100.0,
+            predicted_n: 500,
+            predicted_ms: 10000.0,
+            predicted_per_token_ms: 20.0,
+            predicted_per_second: 50.0,
+        };
+        assert!((timings.completion_tokens_per_second().unwrap() - 50.0).abs() < 0.0001);
+        assert!((timings.prompt_tokens_per_second().unwrap() - 100.0).abs() < 0.0001);
+
+        // 没有 predicted_per_second 时从 predicted_n / (predicted_ms / 1000) 计算
+        let timings_no_per_second = Timings {
+            prompt_n: 0,
+            prompt_ms: 0.0,
+            prompt_per_token_ms: 0.0,
+            prompt_per_second: 0.0,
+            predicted_n: 100,
+            predicted_ms: 2000.0,
+            predicted_per_token_ms: 20.0,
+            predicted_per_second: 0.0,
+        };
+        // 100 tokens / 2 seconds = 50 tokens/s
+        assert!((timings_no_per_second.completion_tokens_per_second().unwrap() - 50.0).abs() < 0.0001);
+    }
+
+    /// 测试无 timings 时通过 usage + duration_ms 反推 token 速度（参考2场景）
+    #[test]
+    fn test_completion_tokens_per_second_with_duration() {
+        // 参考2：无 timings，只有 usage
+        let json = r#"{
+            "id": "chatcmpl-9d2c5c11edc1e071",
+            "object": "chat.completion",
+            "created": 1786084098,
+            "model": "LLM-AI-HEAT",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "你好！"},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 212,
+                "total_tokens": 223
+            }
+        }"#;
+        let completion: ChatCompletion = serde_json::from_str(json).unwrap();
+        assert!(completion.timings.is_none());
+
+        // 假设耗时 2000ms，completion_tokens=212，速度应为 212/2 = 106 tok/s
+        let tps = completion.completion_tokens_per_second_with_duration(2000);
+        assert!(tps.is_some());
+        assert!((tps.unwrap() - 106.0).abs() < 0.0001);
+
+        // prompt_tokens=11，速度应为 11/2 = 5.5 tok/s
+        let pt = completion.prompt_tokens_per_second_with_duration(2000);
+        assert!(pt.is_some());
+        assert!((pt.unwrap() - 5.5).abs() < 0.0001);
+
+        // 有 timings 时，with_duration 应优先使用 timings，忽略 duration_ms
+        let json_with_timings = r#"{
+            "id": "test",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            "timings": {
+                "prompt_n": 1, "prompt_ms": 100.0, "prompt_per_token_ms": 100.0, "prompt_per_second": 10.0,
+                "predicted_n": 1, "predicted_ms": 500.0, "predicted_per_token_ms": 500.0, "predicted_per_second": 2.0
+            }
+        }"#;
+        let completion2: ChatCompletion = serde_json::from_str(json_with_timings).unwrap();
+        // 有 timings 时，无论 duration_ms 传什么，都返回 timings 里的值
+        assert!((completion2.completion_tokens_per_second_with_duration(9999).unwrap() - 2.0).abs() < 0.0001);
+        assert!((completion2.prompt_tokens_per_second_with_duration(9999).unwrap() - 10.0).abs() < 0.0001);
     }
 }

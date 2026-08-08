@@ -9,6 +9,12 @@ pub struct SingleResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     pub duration_ms: u128,
+    /// 补全阶段 token 速度（每秒 token 数），无 timings 时由 usage / duration_ms 反推
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens_per_second: Option<f64>,
+    /// Prompt 阶段 token 速度（每秒 token 数），无 timings 时由 usage / duration_ms 反推
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_per_second: Option<f64>,
     pub error: Option<String>,
 }
 
