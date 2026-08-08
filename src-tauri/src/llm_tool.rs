@@ -252,6 +252,9 @@ pub struct ResponseMessage {
     /// 思考/推理内容（DeepSeek-reasoner、QwQ 等推理模型会返回此字段）
     #[serde(default)]
     pub reasoning_content: Option<String>,
+    /// 思考/推理内容（部分 API 使用此字段名，如 OpenAI o1/o3 系列）
+    #[serde(default, alias = "reasoning")]
+    pub reasoning: Option<String>,
 }
 
 impl ChatCompletion {
@@ -264,10 +267,19 @@ impl ChatCompletion {
     }
 
     /// 获取第一个 choice 的思考内容（若模型不支持则返回 None）
+    ///
+    /// 优先返回 `reasoning_content` 字段，若为空则尝试 `reasoning` 字段
     pub fn reasoning_content(&self) -> Option<&str> {
         self.choices
             .first()
             .and_then(|c| c.message.reasoning_content.as_deref())
+            .filter(|s| !s.is_empty())
+            .or_else(|| {
+                self.choices
+                    .first()
+                    .and_then(|c| c.message.reasoning.as_deref())
+                    .filter(|s| !s.is_empty())
+            })
     }
 
     /// 获取结束原因
@@ -719,6 +731,45 @@ mod tests {
         );
         assert_eq!(completion.finish_reason(), Some("stop"));
         assert_eq!(completion.usage.unwrap().total_tokens, 15);
+    }
+
+    /// 测试 OpenAI o1/o3 系列模型返回的 reasoning 字段（而非 reasoning_content）
+    #[test]
+    fn test_chat_completion_reasoning_field() {
+        let json = r#"{
+            "id": "chatcmpl-9d2c5c11edc1e071",
+            "object": "chat.completion",
+            "created": 1786084098,
+            "model": "LLM-AI-HEAT",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "\n\n你好！有什么我可以帮你的吗？",
+                    "reasoning": "Here's a thinking process:\n\n1. **Analyze User Input:**\n   - User said: \"你好\" (Hello in Chinese)"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 212,
+                "total_tokens": 223
+            }
+        }"#;
+
+        let completion: ChatCompletion = serde_json::from_str(json).unwrap();
+        assert_eq!(completion.content(), "\n\n你好！有什么我可以帮你的吗？");
+        // 应该能从 reasoning 字段提取思考内容
+        assert!(
+            completion.reasoning_content().is_some(),
+            "应该能从 reasoning 字段提取思考内容"
+        );
+        assert!(
+            completion.reasoning_content().unwrap().starts_with("Here's a thinking process"),
+            "思考内容应该以 'Here's a thinking process' 开头"
+        );
+        assert_eq!(completion.finish_reason(), Some("stop"));
+        assert_eq!(completion.usage.unwrap().total_tokens, 223);
     }
 
     #[test]
