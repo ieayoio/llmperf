@@ -317,8 +317,8 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
     const contentLen = win.accumulatedContent.length;
     const reasoningLen = win.accumulatedReasoning.length;
     // 格式化工具：保留两位小数，去掉无意义的末尾零
-    const fmtTps = (tps?: number) =>
-      tps !== undefined && tps > 0 ? ` ${tps.toFixed(2)} tok/s` : "";
+    const fmtTps = (tps?: number, label?: string) =>
+      tps !== undefined && tps > 0 ? ` ${label} ${tps.toFixed(2)} tok/s` : "";
     switch (win.status) {
       case "idle":
         return t("status.idle");
@@ -328,9 +328,9 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
         }
         return t("status.sending", contentLen);
       case "done":
-        return t("status.done", win.duration ?? 0, fmtTps(win.completionTps), fmtTps(win.promptTps));
+        return t("status.done", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")));
       case "error":
-        return t("status.error", win.duration ?? 0, fmtTps(win.completionTps), fmtTps(win.promptTps));
+        return t("status.error", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")));
     }
   };
 

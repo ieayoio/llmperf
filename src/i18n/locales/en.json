@@ -22,7 +22,9 @@
     "done": "✅ Done ({0}ms{1}{2})",
     "error": "❌ {0}ms{1}{2}",
     "content": "content",
-    "reasoning": "reasoning"
+    "reasoning": "reasoning",
+    "completion_label": "Completion",
+    "prompt_label": "Prompt"
   },
   "chat": {
     "window": "Window {0}",

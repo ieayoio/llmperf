@@ -22,7 +22,9 @@
     "done": "✅ 完成 ({0}ms{1}{2})",
     "error": "❌ {0}ms{1}{2}",
     "content": "正文",
-    "reasoning": "思考"
+    "reasoning": "思考",
+    "completion_label": "Completion",
+    "prompt_label": "Prompt"
   },
   "chat": {
     "window": "窗口 {0}",
