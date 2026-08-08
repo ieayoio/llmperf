@@ -30,6 +30,12 @@ pub struct StreamChunkEvent {
     pub finished: bool,
     pub error: Option<String>,
     pub duration_ms: u128,
+    /// 补全阶段 token 速度（每秒 token 数，无数据时为 null）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens_per_second: Option<f64>,
+    /// Prompt 阶段 token 速度（每秒 token 数，无数据时为 null）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_per_second: Option<f64>,
 }
 
 /// 前端传入的配置

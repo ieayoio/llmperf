@@ -19,8 +19,8 @@
     "idle": "⏸ Idle",
     "sending": "⏳ Sending... (content {0} chars)",
     "sending_with_reasoning": "⏳ Sending... (content {0} chars, reasoning {1} chars)",
-    "done": "✅ Done ({0}ms)",
-    "error": "❌ {0}ms",
+    "done": "✅ Done ({0}ms{1}{2})",
+    "error": "❌ {0}ms{1}{2}",
     "content": "content",
     "reasoning": "reasoning"
   },

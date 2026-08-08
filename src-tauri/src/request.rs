@@ -16,6 +16,8 @@ fn emit_error(
         finished: true,
         error: Some(error),
         duration_ms: start.elapsed().as_millis(),
+        completion_tokens_per_second: None,
+        prompt_tokens_per_second: None,
     });
 }
 
@@ -33,6 +35,8 @@ fn emit_chunk(
         finished: false,
         error: None,
         duration_ms: start.elapsed().as_millis(),
+        completion_tokens_per_second: None,
+        prompt_tokens_per_second: None,
     });
 }
 
@@ -50,6 +54,8 @@ fn emit_reasoning_chunk(
         finished: false,
         error: None,
         duration_ms: start.elapsed().as_millis(),
+        completion_tokens_per_second: None,
+        prompt_tokens_per_second: None,
     });
 }
 
@@ -58,6 +64,8 @@ fn emit_finished(
     app: &tauri::AppHandle,
     window_id: usize,
     start: std::time::Instant,
+    completion_tps: Option<f64>,
+    prompt_tps: Option<f64>,
 ) {
     let _ = app.emit("stream_chunk", StreamChunkEvent {
         window_id,
@@ -66,6 +74,8 @@ fn emit_finished(
         finished: true,
         error: None,
         duration_ms: start.elapsed().as_millis(),
+        completion_tokens_per_second: completion_tps,
+        prompt_tokens_per_second: prompt_tps,
     });
 }
 
@@ -155,6 +165,7 @@ pub async fn execute_stream_request(
     let mut accumulated_reasoning = String::new();
     let mut last_error: Option<String> = None;
     let mut finish_info: Option<FinishInfo> = None;
+    let mut got_finish = false; // 是否已收到 finish_reason: stop 事件
 
     while let Some(event_result) = rx.recv().await {
         match event_result {
@@ -174,9 +185,19 @@ pub async fn execute_stream_request(
                     }
                 }
                 StreamEvent::Finish(info) => {
-                    // 流结束，不再处理后续事件
-                    finish_info = Some(info);
-                    break;
+                    // 某些 API 的 finish 事件不带 usage，usage 在后续 chunk 中。
+                    // 因此不立即 break，继续消费直到 [DONE]，用最后收到的 usage 覆盖。
+                    if info.usage.is_some() {
+                        // 本次 Finish 已携带 usage，直接使用
+                        finish_info = Some(info);
+                    } else if !got_finish {
+                        // 首次收到 finish（通常不带 usage），记录但继续等待
+                        finish_info = Some(info);
+                        got_finish = true;
+                    } else {
+                        // 后续又收到 Finish（携带 usage），覆盖
+                        finish_info = Some(info);
+                    }
                 }
             },
             Err(e) => {
@@ -186,10 +207,7 @@ pub async fn execute_stream_request(
         }
     }
 
-    // 7. 发送完成事件
-    emit_finished(&app, window_id, start);
-
-    // 8. 计算 token 速度（优先从 FinishInfo.usage 反推，无 usage 则为 None）
+    // 7. 计算 token 速度（优先从 FinishInfo.usage 反推，无 usage 则为 None）
     let duration_ms = start.elapsed().as_millis();
     let (completion_tps, prompt_tps) = finish_info
         .as_ref()
@@ -208,6 +226,12 @@ pub async fn execute_stream_request(
             (completion_tps, prompt_tps)
         })
         .unwrap_or((None, None));
+
+    // 调试日志：打印 token 速度计算结果
+    eprintln!("[llmperf] window={window_id} duration_ms={duration_ms} completion_tps={:?} prompt_tps={:?}", completion_tps, prompt_tps);
+
+    // 8. 发送完成事件（携带 token 速度）
+    emit_finished(&app, window_id, start, completion_tps, prompt_tps);
 
     // 9. 返回聚合结果
     SingleResult {

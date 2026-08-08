@@ -24,6 +24,10 @@ interface ChatWindow {
   status: "idle" | "sending" | "done" | "error";
   error?: string;
   duration?: number;
+  /** 补全阶段 token 速度（每秒 token 数） */
+  completionTps?: number;
+  /** Prompt 阶段 token 速度（每秒 token 数） */
+  promptTps?: number;
   /** 流式累积正文内容（尚未成为正式消息） */
   accumulatedContent: string;
   /** 流式累积思考内容（推理模型的 thinking 过程） */
@@ -39,6 +43,10 @@ interface StreamChunkPayload {
   finished: boolean;
   error: string | null;
   duration_ms: number;
+  /** 补全阶段 token 速度（每秒 token 数，无数据时为 null） */
+  completion_tokens_per_second?: number | null;
+  /** Prompt 阶段 token 速度（每秒 token 数，无数据时为 null） */
+  prompt_tokens_per_second?: number | null;
 }
 
 function App() {
@@ -59,6 +67,8 @@ function App() {
       status: "idle",
       accumulatedContent: "",
       accumulatedReasoning: "",
+      completionTps: undefined,
+      promptTps: undefined,
     }))
   );
 
@@ -84,6 +94,11 @@ function App() {
       if (cancelled) return;
       const payload = event.payload;
 
+      // 调试日志：打印完成事件的 token 速度
+      if (payload.finished) {
+        console.log(`[llmperf] window=${payload.window_id} finished duration=${payload.duration_ms} completion_tps=${payload.completion_tokens_per_second} prompt_tps=${payload.prompt_tokens_per_second}`);
+      }
+
       setWindows((prev) =>
         prev.map((w) => {
           if (w.id !== payload.window_id) return w;
@@ -104,6 +119,8 @@ function App() {
               status: payload.error ? ("error" as const) : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
+              completionTps: payload.completion_tokens_per_second ?? undefined,
+              promptTps: payload.prompt_tokens_per_second ?? undefined,
               accumulatedContent: "",
               accumulatedReasoning: "",
             };
@@ -145,6 +162,8 @@ function App() {
           status: "idle" as const,
           accumulatedContent: "",
           accumulatedReasoning: "",
+          completionTps: undefined,
+          promptTps: undefined,
         })
       );
       return [...prev, ...added];
@@ -160,7 +179,7 @@ function App() {
       setWindows((prev) => {
         const updated = prev.map((w, i) =>
           i < concurrency
-            ? { ...w, messages: [...w.messages, { role: "user" as const, content: userMessage }], status: "sending" as const, accumulatedContent: "", accumulatedReasoning: "" }
+            ? { ...w, messages: [...w.messages, { role: "user" as const, content: userMessage }], status: "sending" as const, accumulatedContent: "", accumulatedReasoning: "", completionTps: undefined, promptTps: undefined }
             : w
         );
         const active = updated.filter((w) => w.id < concurrency);
@@ -197,6 +216,8 @@ function App() {
         status: "idle" as const,
         error: undefined,
         duration: undefined,
+        completionTps: undefined,
+        promptTps: undefined,
         accumulatedContent: "",
         accumulatedReasoning: "",
       }))
@@ -295,19 +316,21 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
   const statusLabel = () => {
     const contentLen = win.accumulatedContent.length;
     const reasoningLen = win.accumulatedReasoning.length;
+    // 格式化工具：保留两位小数，去掉无意义的末尾零
+    const fmtTps = (tps?: number) =>
+      tps !== undefined && tps > 0 ? ` ${tps.toFixed(2)} tok/s` : "";
     switch (win.status) {
       case "idle":
         return t("status.idle");
       case "sending":
-        // 处理带变量的状态文本
         if (reasoningLen > 0) {
           return t("status.sending_with_reasoning", contentLen, reasoningLen);
         }
         return t("status.sending", contentLen);
       case "done":
-        return t("status.done", win.duration ?? 0);
+        return t("status.done", win.duration ?? 0, fmtTps(win.completionTps), fmtTps(win.promptTps));
       case "error":
-        return t("status.error", win.duration ?? 0);
+        return t("status.error", win.duration ?? 0, fmtTps(win.completionTps), fmtTps(win.promptTps));
     }
   };
 

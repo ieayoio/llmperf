@@ -19,8 +19,8 @@
     "idle": "⏸ 空闲",
     "sending": "⏳ 发送中... (正文 {0} 字符)",
     "sending_with_reasoning": "⏳ 发送中... (正文 {0} 字符, 思考 {1} 字符)",
-    "done": "✅ 完成 ({0}ms)",
-    "error": "❌ {0}ms",
+    "done": "✅ 完成 ({0}ms{1}{2})",
+    "error": "❌ {0}ms{1}{2}",
     "content": "正文",
     "reasoning": "思考"
   },
