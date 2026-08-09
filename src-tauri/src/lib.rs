@@ -5,12 +5,11 @@ mod concurrent;
 mod llm_tool;
 mod menu;
 
-use std::sync::Arc;
-
 use tauri::{Emitter, Manager, Runtime};
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
 pub use llm_tool::{LlmClient, ClientConfig, ChatMessage, ChatParams, ChatCompletion, Role, StreamEvent, Timings};
+use menu::LangItems;
 
 /// Tauri 命令：设置初始语言（用于同步菜单栏勾选状态）
 ///
@@ -21,7 +20,7 @@ fn set_initial_language(
     lang: String,
 ) {
     // 从 app state 获取语言菜单项并更新勾选状态
-    let lang_items = app.state::<crate::menu::LangItems<tauri::Wry>>();
+    let lang_items = app.state::<LangItems<tauri::Wry>>();
     let is_zh_sc = lang == "zh-SC";
     let is_zh_tc = lang == "zh-TC";
     let _ = lang_items.zh_sc.set_checked(is_zh_sc);
@@ -35,16 +34,6 @@ fn set_initial_language(
     for window in app.webview_windows().values() {
         let _ = window.emit("language-sync", &lang);
     }
-}
-
-/// 存储语言菜单项的容器，用于在命令中访问和更新
-pub struct LangItems<R: Runtime> {
-    /// 简体中文菜单项
-    pub zh_sc: Arc<tauri::menu::CheckMenuItem<R>>,
-    /// 繁体中文菜单项
-    pub zh_tc: Arc<tauri::menu::CheckMenuItem<R>>,
-    /// 英文菜单项
-    pub en: Arc<tauri::menu::CheckMenuItem<R>>,
 }
 
 /// Tauri 命令：并发发送 LLM 请求
@@ -79,9 +68,9 @@ fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
 
             // 将新的语言菜单项注册到 app state
             app.manage(crate::menu::LangItems {
-                zh_sc: new_zh_sc.item.clone(),
-                zh_tc: new_zh_tc.item.clone(),
-                en: new_en.item.clone(),
+                zh_sc: new_zh_sc.clone(),
+                zh_tc: new_zh_tc.clone(),
+                en: new_en.clone(),
             });
         }
         Err(e) => {
@@ -104,9 +93,9 @@ pub fn run() {
 
             // 将语言菜单项注册到 app state，供命令访问
             app.manage(menu::LangItems {
-                zh_sc: lang_zh_sc.item.clone(),
-                zh_tc: lang_zh_tc.item.clone(),
-                en: lang_en.item.clone(),
+                zh_sc: lang_zh_sc.clone(),
+                zh_tc: lang_zh_tc.clone(),
+                en: lang_en.clone(),
             });
 
             // 注册菜单事件处理器：处理语言切换 + 窗口操作

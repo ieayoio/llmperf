@@ -3,6 +3,9 @@
 /// 使用 Tauri 2.11 的原生菜单系统，提供带勾选提示的语言切换功能。
 /// 点击菜单项时会触发 menu_event，前端通过监听事件来切换语言。
 /// 菜单文本会随语言切换通过重建菜单来动态更新。
+///
+/// 所有菜单文本均从 @src/i18n/locales/ 下的 JSON 文件读取，
+/// 无需在 Rust 代码中硬编码任何翻译文本。
 
 use std::sync::Arc;
 use tauri::{
@@ -10,13 +13,83 @@ use tauri::{
     AppHandle, Runtime,
 };
 
-/// 语言菜单项引用（用于更新勾选状态）
-pub struct LangItem<R: Runtime> {
-    /// 菜单项引用（用于更新勾选状态）
-    pub item: Arc<CheckMenuItem<R>>,
+// ============================================================
+// 从 locales JSON 文件编译期嵌入翻译数据
+// 路径相对于 src-tauri/src/menu.rs，使用 ../../ 回到项目根目录
+// ============================================================
+
+/// 简体中文语言包（编译期嵌入）
+const LOCALE_ZH_SC: &str = include_str!("../../src/i18n/locales/zh-SC.json");
+/// 繁体中文语言包（编译期嵌入）
+const LOCALE_ZH_TC: &str = include_str!("../../src/i18n/locales/zh-TC.json");
+/// 英文语言包（编译期嵌入）
+const LOCALE_EN: &str = include_str!("../../src/i18n/locales/en.json");
+
+/// 从嵌入的 JSON 字符串中解析出 menu 和 language 区块
+/// 返回 (menu_json, language_json)
+fn parse_locale(json_str: &str) -> (serde_json::Value, serde_json::Value) {
+    let val: serde_json::Value =
+        serde_json::from_str(json_str).expect("[menu] 无法解析语言包 JSON");
+    let menu = val.get("menu").cloned().unwrap_or(serde_json::Value::Object(Default::default()));
+    let language = val
+        .get("language")
+        .cloned()
+        .unwrap_or(serde_json::Value::Object(Default::default()));
+    (menu, language)
 }
 
-/// 存储语言菜单项的容器，用于在命令中访问和更新
+/// 从 JSON Value 中安全获取字符串字段
+fn str_val(val: &serde_json::Value, key: &str) -> String {
+    val.get(key).and_then(|v| v.as_str()).unwrap_or(key).to_string()
+}
+
+/// 根据语言代码获取对应的菜单文本和语言选项名称
+///
+/// 所有文本均来自 locales JSON 文件，确保前后端翻译一致。
+///
+/// 返回: (
+///   app_name, about_text, quit_text, hide_text, hide_others_text,
+///   minimize_text, maximize_text, close_text,
+///   lang_zh_sc_name, lang_zh_tc_name, lang_name, window_name
+/// )
+fn menu_texts(lang: &str) -> (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
+    let (menu, language) = match lang {
+        "zh-SC" => parse_locale(LOCALE_ZH_SC),
+        "zh-TC" => parse_locale(LOCALE_ZH_TC),
+        _ => parse_locale(LOCALE_EN),
+    };
+
+    (
+        str_val(&menu, "app"),
+        str_val(&menu, "about"),
+        str_val(&menu, "quit"),
+        str_val(&menu, "hide"),
+        str_val(&menu, "hideOthers"),
+        str_val(&menu, "minimize"),
+        str_val(&menu, "maximize"),
+        str_val(&menu, "close"),
+        // 语言选项名称从 language 区块读取，始终使用当前语言的写法
+        language.get("zh-SC").and_then(|v| v.as_str()).unwrap_or("简体中文").to_string(),
+        language.get("zh-TC").and_then(|v| v.as_str()).unwrap_or("繁體中文").to_string(),
+        str_val(&menu, "language"),
+        str_val(&menu, "window"),
+    )
+}
+
+/// 存储语言菜单项的容器，供 lib.rs 中的命令访问和更新
 pub struct LangItems<R: Runtime> {
     /// 简体中文菜单项
     pub zh_sc: Arc<CheckMenuItem<R>>,
@@ -24,75 +97,6 @@ pub struct LangItems<R: Runtime> {
     pub zh_tc: Arc<CheckMenuItem<R>>,
     /// 英文菜单项
     pub en: Arc<CheckMenuItem<R>>,
-}
-
-/// 根据语言代码返回对应的菜单文本
-/// 语言选项的显示名称始终保持固定（简体中文/繁體中文/English），
-/// 不随当前选择的语言变化，避免用户混淆。
-/// 返回: (app_name, about_text, quit_text, hide_text, hide_others_text,
-///        minimize_text, maximize_text, close_text,
-///        lang_zh_sc_text, lang_zh_tc_text, lang_name, window_name)
-fn zh_menu_texts(lang: &str) -> (
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-) {
-    if lang == "zh-SC" {
-        (
-            "应用",
-            "关于 LLMPerf...",
-            "退出",
-            "隐藏",
-            "隐藏其他",
-            "最小化",
-            "最大化",
-            "关闭窗口",
-            "简体中文",
-            "繁體中文",
-            "语言",
-            "窗口",
-        )
-    } else if lang == "zh-TC" {
-        (
-            "應用程式",
-            "關於 LLMPerf...",
-            "離開",
-            "隱藏",
-            "隱藏其他",
-            "最小化",
-            "最大化",
-            "關閉視窗",
-            // 语言选项的显示名称始终固定，不随当前语言变化
-            "简体中文",
-            "繁體中文",
-            "語言",
-            "視窗",
-        )
-    } else {
-        (
-            "App",
-            "About LLMPerf...",
-            "Quit",
-            "Hide",
-            "Hide Others",
-            "Minimize",
-            "Maximize",
-            "Close Window",
-            "简体中文",
-            "繁體中文",
-            "Language",
-            "Window",
-        )
-    }
 }
 
 /// 创建应用的原生菜单栏
@@ -108,11 +112,11 @@ fn zh_menu_texts(lang: &str) -> (
 /// * `initial_lang` - 初始化语言（"zh-SC"、"zh-TC" 或 "en"），用于设置菜单项的初始勾选状态和文本
 ///
 /// # 返回值
-/// * `(Menu, LangItem, LangItem, LangItem)` - 主菜单、简体中文菜单项、繁体中文菜单项、英文菜单项
+/// * `(Menu, Arc<CheckMenuItem>, Arc<CheckMenuItem>, Arc<CheckMenuItem>)` - 主菜单、简体中文菜单项、繁体中文菜单项、英文菜单项
 pub fn create_menu<R: Runtime>(
     app: &AppHandle<R>,
     initial_lang: &str,
-) -> tauri::Result<(Menu<R>, LangItem<R>, LangItem<R>, LangItem<R>)> {
+) -> tauri::Result<(Menu<R>, Arc<CheckMenuItem<R>>, Arc<CheckMenuItem<R>>, Arc<CheckMenuItem<R>>)> {
     let (
         app_name,
         about_text,
@@ -126,7 +130,7 @@ pub fn create_menu<R: Runtime>(
         lang_zh_tc_text,
         lang_name,
         window_name,
-    ) = zh_menu_texts(initial_lang);
+    ) = menu_texts(initial_lang);
     let is_zh_sc = initial_lang == "zh-SC";
     let is_zh_tc = initial_lang == "zh-TC";
 
@@ -239,9 +243,5 @@ pub fn create_menu<R: Runtime>(
         &[&app_menu, &language_menu, &window_menu],
     )?;
 
-    let lang_zh_sc_config = LangItem { item: lang_zh_sc };
-    let lang_zh_tc_config = LangItem { item: lang_zh_tc };
-    let lang_en_config = LangItem { item: lang_en };
-
-    Ok((menu, lang_zh_sc_config, lang_zh_tc_config, lang_en_config))
+    Ok((menu, lang_zh_sc, lang_zh_tc, lang_en))
 }
