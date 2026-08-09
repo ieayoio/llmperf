@@ -21,12 +21,14 @@
  *   setLanguage('en');
  */
 
-import zh from "./locales/zh.json";
+import zhSC from "./locales/zh-SC.json";
+import zhTC from "./locales/zh-TC.json";
 import en from "./locales/en.json";
 
 /** 支持的语言列表 - 非程序员只需在这里添加新语言即可 */
 export const SUPPORTED_LANGUAGES: Record<string, { code: string; name: string }> = {
-  zh: { code: "zh", name: "中文" },
+  "zh-SC": { code: "zh-SC", name: "简体中文" },
+  "zh-TC": { code: "zh-TC", name: "繁體中文" },
   en: { code: "en", name: "English" },
   // 添加新语言示例:
   // ja: { code: "ja", name: "日本語" },
@@ -36,12 +38,13 @@ export const SUPPORTED_LANGUAGES: Record<string, { code: string; name: string }>
 
 /** 语言包字典 */
 const localeFiles: Record<string, Record<string, unknown>> = {
-  zh,
+  "zh-SC": zhSC,
+  "zh-TC": zhTC,
   en,
 };
 
-/** 当前语言代码，默认为中文 */
-let currentLang: string = "zh";
+/** 当前语言代码，默认为简体中文 */
+let currentLang: string = "zh-SC";
 
 /** 从 localStorage 读取上次选择的语言 */
 function loadSavedLanguage(): string {
@@ -53,7 +56,7 @@ function loadSavedLanguage(): string {
   } catch {
     // localStorage 不可用时忽略
   }
-  return "zh";
+  return "zh-SC";
 }
 
 /**
@@ -91,8 +94,8 @@ for (const [code, locale] of Object.entries(localeFiles)) {
  *   t('status.sending', 100, true)    // → "⏳ 发送中... (正文 100 字符, 思考 50 字符)"
  */
 export function t(key: string, ...replacements: (string | number | boolean)[]): string {
-  const locale = flatLocales[currentLang] || flatLocales["zh"];
-  let text = locale[key] || locale[`zh.${key}`] || key; // fallback 到中文，再 fallback 到 key 本身
+  const locale = flatLocales[currentLang] || flatLocales["zh-SC"];
+  let text = locale[key] || locale[`zh-SC.${key}`] || key; // fallback 到简体中文，再 fallback 到 key 本身
 
   // 替换 {0}, {1} 等占位符
   replacements.forEach((value, index) => {
@@ -109,7 +112,7 @@ export function getCurrentLanguage(): string {
 
 /** 切换语言
  * 
- * @param lang - 语言代码，如 "zh"、"en"
+ * @param lang - 语言代码，如 "zh-SC"、"zh-TC"、"en"
  * 
  * 切换后会自动：
  * - 保存到 localStorage，下次打开应用时保持选择

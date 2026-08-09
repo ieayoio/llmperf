@@ -22,9 +22,11 @@ fn set_initial_language(
 ) {
     // 从 app state 获取语言菜单项并更新勾选状态
     let lang_items = app.state::<crate::menu::LangItems<tauri::Wry>>();
-    let is_zh = lang == "zh";
-    let _ = lang_items.zh.set_checked(is_zh);
-    let _ = lang_items.en.set_checked(!is_zh);
+    let is_zh_sc = lang == "zh-SC";
+    let is_zh_tc = lang == "zh-TC";
+    let _ = lang_items.zh_sc.set_checked(is_zh_sc);
+    let _ = lang_items.zh_tc.set_checked(is_zh_tc);
+    let _ = lang_items.en.set_checked(!is_zh_sc && !is_zh_tc);
 
     // 重建菜单以同步文本
     rebuild_menu(&app, &lang);
@@ -37,7 +39,11 @@ fn set_initial_language(
 
 /// 存储语言菜单项的容器，用于在命令中访问和更新
 pub struct LangItems<R: Runtime> {
-    pub zh: Arc<tauri::menu::CheckMenuItem<R>>,
+    /// 简体中文菜单项
+    pub zh_sc: Arc<tauri::menu::CheckMenuItem<R>>,
+    /// 繁体中文菜单项
+    pub zh_tc: Arc<tauri::menu::CheckMenuItem<R>>,
+    /// 英文菜单项
     pub en: Arc<tauri::menu::CheckMenuItem<R>>,
 }
 
@@ -64,7 +70,7 @@ fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
 
     // 创建新菜单，create_menu 会根据 lang 参数正确设置勾选状态
     match menu::create_menu(app, lang) {
-        Ok((new_menu, new_zh, new_en)) => {
+        Ok((new_menu, new_zh_sc, new_zh_tc, new_en)) => {
             // 应用新菜单
             if let Err(e) = app.set_menu(new_menu) {
                 eprintln!("[menu] 设置新菜单失败: {}", e);
@@ -73,7 +79,8 @@ fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
 
             // 将新的语言菜单项注册到 app state
             app.manage(crate::menu::LangItems {
-                zh: new_zh.item.clone(),
+                zh_sc: new_zh_sc.item.clone(),
+                zh_tc: new_zh_tc.item.clone(),
                 en: new_en.item.clone(),
             });
         }
@@ -91,13 +98,14 @@ pub fn run() {
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
             // 创建菜单，同时获取语言菜单项的 Arc 引用
-            // 初始语言默认为中文，后续会通过 set_initial_language 命令更新
-            let (menu, lang_zh, lang_en) = menu::create_menu(app.handle(), "zh")?;
+            // 初始语言默认为简体中文，后续会通过 set_initial_language 命令更新
+            let (menu, lang_zh_sc, lang_zh_tc, lang_en) = menu::create_menu(app.handle(), "zh-SC")?;
             app.set_menu(menu)?;
 
             // 将语言菜单项注册到 app state，供命令访问
             app.manage(menu::LangItems {
-                zh: lang_zh.item.clone(),
+                zh_sc: lang_zh_sc.item.clone(),
+                zh_tc: lang_zh_tc.item.clone(),
                 en: lang_en.item.clone(),
             });
 
@@ -106,12 +114,19 @@ pub fn run() {
                 let id = event.id();
 
                 // === 语言切换 ===
-                if *id == "lang-zh" {
+                if *id == "lang-zh-SC" {
                     // 重建菜单以同步文本
-                    rebuild_menu(&app, "zh");
+                    rebuild_menu(&app, "zh-SC");
                     // 通知所有前端窗口切换语言
                     for window in app.webview_windows().values() {
-                        let _ = window.emit("language-changed", "zh");
+                        let _ = window.emit("language-changed", "zh-SC");
+                    }
+                } else if *id == "lang-zh-TC" {
+                    // 重建菜单以同步文本
+                    rebuild_menu(&app, "zh-TC");
+                    // 通知所有前端窗口切换语言
+                    for window in app.webview_windows().values() {
+                        let _ = window.emit("language-changed", "zh-TC");
                     }
                 } else if *id == "lang-en" {
                     // 重建菜单以同步文本

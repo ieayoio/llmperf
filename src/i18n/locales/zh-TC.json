@@ -1,0 +1,57 @@
+{
+  "app": {
+    "title": "⚡ LLM 並發測試工具"
+  },
+  "menu": {
+    "app": "應用程式",
+    "about": "關於 LLMPerf...",
+    "quit": "離開",
+    "hide": "隱藏",
+    "hideOthers": "隱藏其他",
+    "language": "語言",
+    "window": "視窗",
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "close": "關閉視窗"
+  },
+  "config": {
+    "baseURL": "Base URL",
+    "baseURLPlaceholder": "http://127.0.0.1:16777/v1",
+    "apiKey": "API 金鑰",
+    "apiKeyPlaceholder": "sk-...",
+    "model": "模型",
+    "modelPlaceholder": "gpt-3.5-turbo",
+    "concurrency": "並發數",
+    "sendMessage": "發送訊息",
+    "messagePlaceholder": "輸入要測試的訊息 (Enter 發送)",
+    "send": "🚀 發送",
+    "clear": "🗑 清空"
+  },
+  "status": {
+    "idle": "⏸ 空閒",
+    "sending": "⏳ 發送中... (正文 {0} 字元)",
+    "sending_with_reasoning": "⏳ 發送中... (正文 {0} 字元, 思考 {1} 字元)",
+    "done": "✅ 完成 ({0}ms{1}{2})",
+    "error": "❌ {0}ms{1}{2}",
+    "content": "正文",
+    "reasoning": "思考",
+    "completion_label": "Completion",
+    "prompt_label": "Prompt"
+  },
+  "chat": {
+    "window": "視窗 {0}",
+    "empty": "等待發送...",
+    "user": "👤 你",
+    "assistant": "🤖 模型",
+    "reasoning": "💭 思考過程",
+    "error": "錯誤:",
+    "reasoningSummary": "💭 思考過程"
+  },
+  "language": {
+    "label": "語言",
+    "zh-SC": "簡體中文",
+    "zh-TC": "繁體中文",
+    "en": "English",
+    "menu": "語言"
+  }
+}
