@@ -1,5 +1,7 @@
 # ⚡ LLM 并发测试工具 (llmperf)
 
+> **切换语言:** [English](README.en.md) | **中文**
+
 一款基于 [Tauri 2](https://tauri.app/) 开发的跨平台桌面应用，用于对 LLM API（兼容 OpenAI 接口）进行**并发流式请求测试**，直观对比多路请求的表现。
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
@@ -128,6 +130,8 @@ llmperf/
 ├── index.html                # HTML 入口
 ├── vite.config.ts            # Vite 配置
 ├── tsconfig.json             # TypeScript 配置
+├── README.md                 # 中文文档
+├── README.en.md              # 英文文档
 └── package.json              # Node.js 依赖
 ```
 
