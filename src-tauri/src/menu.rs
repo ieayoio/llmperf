@@ -15,6 +15,14 @@ pub struct LangItem<R: Runtime> {
     pub item: Arc<CheckMenuItem<R>>,
 }
 
+/// 存储语言菜单项的容器，用于在命令中访问和更新
+pub struct LangItems<R: Runtime> {
+    /// 中文菜单项
+    pub zh: Arc<CheckMenuItem<R>>,
+    /// 英文菜单项
+    pub en: Arc<CheckMenuItem<R>>,
+}
+
 /// 创建应用的原生菜单栏
 ///
 /// 当前包含以下菜单：
@@ -23,7 +31,10 @@ pub struct LangItem<R: Runtime> {
 /// - **窗口**：最小化
 ///
 /// 勾选状态会随语言切换自动更新。
-pub fn create_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(Menu<R>, LangItem<R>, LangItem<R>)> {
+///
+/// # 参数
+/// * `initial_lang` - 初始化语言（"zh" 或 "en"），用于设置菜单项的初始勾选状态
+pub fn create_menu<R: Runtime>(app: &AppHandle<R>, initial_lang: &str) -> tauri::Result<(Menu<R>, LangItem<R>, LangItem<R>)> {
     // === 应用菜单 ===
     let app_menu = Submenu::with_items(
         app,
@@ -50,13 +61,14 @@ pub fn create_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(Menu<R>, La
     )?;
 
     // === 语言菜单：使用 CheckMenuItem 实现勾选提示 ===
-    // 默认中文为选中状态 (checked: true)，英文为未选中 (checked: false)
+    // 根据传入的 initial_lang 设置初始勾选状态
+    let is_zh = initial_lang == "zh";
     let lang_zh_item = CheckMenuItem::with_id(
         app,
         "lang-zh".to_string(),
         "中文",
         true,
-        true, // 默认选中
+        is_zh, // 根据初始语言设置是否选中
         None::<String>,
     )?;
     let lang_zh = Arc::new(lang_zh_item);
@@ -66,7 +78,7 @@ pub fn create_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(Menu<R>, La
         "lang-en".to_string(),
         "English",
         true,
-        false, // 默认未选中
+        !is_zh, // 根据初始语言设置是否选中
         None::<String>,
     )?;
     let lang_en = Arc::new(lang_en_item);

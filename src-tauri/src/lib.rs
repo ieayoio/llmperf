@@ -5,10 +5,39 @@ mod concurrent;
 mod llm_tool;
 mod menu;
 
-use tauri::{Emitter, Manager};
+use std::sync::Arc;
+
+use tauri::{Emitter, Manager, Runtime};
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
 pub use llm_tool::{LlmClient, ClientConfig, ChatMessage, ChatParams, ChatCompletion, Role, StreamEvent, Timings};
+
+/// Tauri 命令：设置初始语言（用于同步菜单栏勾选状态）
+///
+/// 前端在初始化时调用此命令，将 localStorage 中保存的语言设置同步到后端菜单。
+/// 此命令需要从 app state 中获取菜单项引用并更新勾选状态。
+#[tauri::command]
+fn set_initial_language(
+    app: tauri::AppHandle,
+    lang: String,
+) {
+    // 从 app state 获取语言菜单项（State 实现了 Deref，可直接解引用）
+    let lang_items = app.state::<crate::menu::LangItems<tauri::Wry>>();
+    let is_zh = lang == "zh";
+    let _ = lang_items.zh.set_checked(is_zh);
+    let _ = lang_items.en.set_checked(!is_zh);
+    
+    // 通知所有前端窗口菜单已同步
+    for window in app.webview_windows().values() {
+        let _ = window.emit("language-sync", &lang);
+    }
+}
+
+/// 存储语言菜单项的容器，用于在命令中访问和更新
+pub struct LangItems<R: Runtime> {
+    pub zh: Arc<tauri::menu::CheckMenuItem<R>>,
+    pub en: Arc<tauri::menu::CheckMenuItem<R>>,
+}
 
 /// Tauri 命令：并发发送 LLM 请求
 ///
@@ -27,12 +56,19 @@ async fn send_concurrent_request(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![send_concurrent_request])
+        .invoke_handler(tauri::generate_handler![send_concurrent_request, set_initial_language])
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
             // 创建菜单，同时获取语言菜单项的 Arc 引用
-            let (menu, lang_zh, lang_en) = menu::create_menu(app.handle())?;
+            // 初始语言默认为中文，后续会通过 set_initial_language 命令更新
+            let (menu, lang_zh, lang_en) = menu::create_menu(app.handle(), "zh")?;
             app.set_menu(menu)?;
+
+            // 将语言菜单项注册到 app state，供命令访问
+            app.manage(menu::LangItems {
+                zh: lang_zh.item.clone(),
+                en: lang_en.item.clone(),
+            });
 
             // 将语言项的 Arc 引用克隆到闭包中，用于在菜单事件中更新勾选状态
             let zh_item = lang_zh.item.clone();

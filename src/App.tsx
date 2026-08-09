@@ -7,6 +7,16 @@ import "./App.css";
 // 初始化国际化（从 localStorage 加载语言设置）
 initI18n();
 
+/** 同步语言设置到后端菜单栏 */
+async function syncLanguageToMenu(): Promise<void> {
+  const lang = getCurrentLanguage();
+  try {
+    await invoke<void>("set_initial_language", { lang });
+  } catch (e) {
+    console.warn("[i18n] 同步语言到菜单失败:", e);
+  }
+}
+
 /** 单条聊天消息 */
 interface ChatMessage {
   role: "user" | "assistant";
@@ -85,6 +95,11 @@ function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
+  }, []);
+
+  // 初始化时同步语言设置到后端菜单栏
+  useEffect(() => {
+    syncLanguageToMenu();
   }, []);
 
   // 监听流式事件
