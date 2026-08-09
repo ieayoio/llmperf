@@ -2,6 +2,18 @@
   "app": {
     "title": "⚡ LLM 并发测试工具"
   },
+  "menu": {
+    "app": "应用",
+    "about": "关于 LLMPerf...",
+    "quit": "退出",
+    "hide": "隐藏",
+    "hideOthers": "隐藏其他",
+    "language": "语言",
+    "window": "窗口",
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "close": "关闭窗口"
+  },
   "config": {
     "baseURL": "Base URL",
     "baseURLPlaceholder": "http://127.0.0.1:16777/v1",

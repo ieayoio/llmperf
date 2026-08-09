@@ -15,18 +15,20 @@ pub use llm_tool::{LlmClient, ClientConfig, ChatMessage, ChatParams, ChatComplet
 /// Tauri 命令：设置初始语言（用于同步菜单栏勾选状态）
 ///
 /// 前端在初始化时调用此命令，将 localStorage 中保存的语言设置同步到后端菜单。
-/// 此命令需要从 app state 中获取菜单项引用并更新勾选状态。
 #[tauri::command]
 fn set_initial_language(
     app: tauri::AppHandle,
     lang: String,
 ) {
-    // 从 app state 获取语言菜单项（State 实现了 Deref，可直接解引用）
+    // 从 app state 获取语言菜单项并更新勾选状态
     let lang_items = app.state::<crate::menu::LangItems<tauri::Wry>>();
     let is_zh = lang == "zh";
     let _ = lang_items.zh.set_checked(is_zh);
     let _ = lang_items.en.set_checked(!is_zh);
-    
+
+    // 重建菜单以同步文本
+    rebuild_menu(&app, &lang);
+
     // 通知所有前端窗口菜单已同步
     for window in app.webview_windows().values() {
         let _ = window.emit("language-sync", &lang);
@@ -52,6 +54,43 @@ async fn send_concurrent_request(
     concurrent::run_concurrent_requests(app, config, concurrency).await
 }
 
+/// 重建菜单栏：移除旧菜单并创建新菜单
+///
+/// 在 Linux/GTK 上，直接修改菜单项文本不一定能触发 UI 刷新，
+/// 因此采用重建整个菜单的方式来确保文本正确更新。
+fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
+    // 获取当前语言菜单项的勾选状态
+    let lang_items = app.state::<crate::menu::LangItems<R>>();
+    let is_zh_checked = lang_items.zh.is_checked().unwrap_or(true);
+
+    // 移除旧菜单（会同时移除所有窗口上的旧菜单）
+    let _ = app.remove_menu();
+
+    // 创建新菜单
+    match menu::create_menu(app, lang) {
+        Ok((new_menu, new_zh, new_en)) => {
+            // 应用新菜单
+            if let Err(e) = app.set_menu(new_menu) {
+                eprintln!("[menu] 设置新菜单失败: {}", e);
+                return;
+            }
+
+            // 恢复勾选状态（create_menu 根据 lang 参数设置，但需要确保一致）
+            let _ = new_zh.item.set_checked(is_zh_checked);
+            let _ = new_en.item.set_checked(!is_zh_checked);
+
+            // 将新的语言菜单项注册到 app state
+            app.manage(crate::menu::LangItems {
+                zh: new_zh.item.clone(),
+                en: new_en.item.clone(),
+            });
+        }
+        Err(e) => {
+            eprintln!("[menu] 创建新菜单失败: {}", e);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,51 +109,69 @@ pub fn run() {
                 en: lang_en.item.clone(),
             });
 
-            // 将语言项的 Arc 引用克隆到闭包中，用于在菜单事件中更新勾选状态
-            let zh_item = lang_zh.item.clone();
-            let en_item = lang_en.item.clone();
+            // 将语言项的 Arc 引用克隆到闭包中（保留用于其他用途，语言切换由 rebuild_menu 处理）
 
-            // 注册菜单事件处理器：处理语言切换 + 窗口操作 + 勾选状态更新
+            // 注册菜单事件处理器：处理语言切换 + 窗口操作
             app.on_menu_event(move |app, event| {
                 let id = event.id();
-                
+
                 // === 语言切换 ===
                 if *id == "lang-zh" {
-                    // 选中中文，取消英文勾选
-                    let _ = zh_item.set_checked(true);
-                    let _ = en_item.set_checked(false);
+                    // 重建菜单以同步文本
+                    rebuild_menu(&app, "zh");
                     // 通知所有前端窗口切换语言
                     for window in app.webview_windows().values() {
                         let _ = window.emit("language-changed", "zh");
                     }
                 } else if *id == "lang-en" {
-                    // 选中英文，取消中文勾选
-                    let _ = en_item.set_checked(true);
-                    let _ = zh_item.set_checked(false);
+                    // 重建菜单以同步文本
+                    rebuild_menu(&app, "en");
                     // 通知所有前端窗口切换语言
                     for window in app.webview_windows().values() {
                         let _ = window.emit("language-changed", "en");
                     }
                 }
-                // === 窗口操作 ===
-                else if *id == "win-minimize" {
-                    // 最小化所有窗口
+                // === 应用菜单 ===
+                if *id == "about" {
+                    // 显示关于对话框（通过事件通知前端）
                     for window in app.webview_windows().values() {
-                        let _ = window.minimize();
+                        let _ = window.emit("menu-about", &());
                     }
-                } else if *id == "win-maximize" {
-                    // 最大化/还原所有窗口
-                    for window in app.webview_windows().values() {
-                        if window.is_maximized().unwrap_or(false) {
-                            let _ = window.unmaximize();
-                        } else {
-                            let _ = window.maximize();
+                } else if *id == "quit" {
+                    // 退出应用
+                    app.exit(0);
+                } else {
+                    #[cfg(target_os = "macos")]
+                    if *id == "hide" {
+                        // macOS: 隐藏当前应用的所有窗口
+                        for window in app.webview_windows().values() {
+                            let _ = window.hide();
                         }
-                    }
-                } else if *id == "win-close" {
-                    // 关闭所有窗口
-                    for window in app.webview_windows().values() {
-                        let _ = window.close();
+                    } else if *id == "hide-others" {
+                        // macOS: 隐藏其他应用
+                        let _ = app.hide_other();
+                    } else {
+                        // === 窗口操作 ===
+                        if *id == "win-minimize" {
+                            // 最小化所有窗口
+                            for window in app.webview_windows().values() {
+                                let _ = window.minimize();
+                            }
+                        } else if *id == "win-maximize" {
+                            // 最大化/还原所有窗口
+                            for window in app.webview_windows().values() {
+                                if window.is_maximized().unwrap_or(false) {
+                                    let _ = window.unmaximize();
+                                } else {
+                                    let _ = window.maximize();
+                                }
+                            }
+                        } else if *id == "win-close" {
+                            // 关闭所有窗口
+                            for window in app.webview_windows().values() {
+                                let _ = window.close();
+                            }
+                        }
                     }
                 }
             });

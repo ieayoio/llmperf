@@ -2,6 +2,18 @@
   "app": {
     "title": "⚡ LLM Concurrency Tester"
   },
+  "menu": {
+    "app": "App",
+    "about": "About LLMPerf...",
+    "quit": "Quit",
+    "hide": "Hide",
+    "hideOthers": "Hide Others",
+    "language": "Language",
+    "window": "Window",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "close": "Close Window"
+  },
   "config": {
     "baseURL": "Base URL",
     "baseURLPlaceholder": "http://127.0.0.1:16777/v1",

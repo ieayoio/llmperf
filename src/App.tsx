@@ -102,6 +102,16 @@ function App() {
     syncLanguageToMenu();
   }, []);
 
+  // 监听关于对话框事件
+  useEffect(() => {
+    const unlisten = listen<void>("menu-about", () => {
+      alert(`${t('app.title')}\n版本 0.1.0`);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // 监听流式事件
   useEffect(() => {
     let cancelled = false;
