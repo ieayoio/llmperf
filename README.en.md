@@ -75,6 +75,11 @@ npm run build
 
 # Build Linux version
 npm run tauri build -- --target x86_64-unknown-linux-gnu
+
+# Build Windows version on non-Windows platforms
+npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
+
+> 💡 Reference: [Windows Installer Build Guide](https://v2.tauri.app/distribute/windows-installer/)
 ```
 
 Build artifacts are located in `src-tauri/target/release/bundle/` directory, depending on the target platform:

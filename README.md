@@ -75,6 +75,11 @@ npm run build
 
 # 构建linux版本
 npm run tauri build -- --target x86_64-unknown-linux-gnu
+
+# 在非 Windows 平台构建 Windows 版本
+npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
+
+> 💡 参考链接：[Windows Installer 构建指南](https://v2.tauri.app/distribute/windows-installer/)
 ```
 
 构建产物位于 `src-tauri/target/release/bundle/` 目录下，具体取决于目标平台：
