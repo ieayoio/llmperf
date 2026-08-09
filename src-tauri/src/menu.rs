@@ -27,6 +27,8 @@ pub struct LangItems<R: Runtime> {
 }
 
 /// 根据语言代码返回对应的菜单文本
+/// 语言选项的显示名称始终保持固定（简体中文/繁體中文/English），
+/// 不随当前选择的语言变化，避免用户混淆。
 /// 返回: (app_name, about_text, quit_text, hide_text, hide_others_text,
 ///        minimize_text, maximize_text, close_text,
 ///        lang_zh_sc_text, lang_zh_tc_text, lang_name, window_name)
@@ -69,7 +71,8 @@ fn zh_menu_texts(lang: &str) -> (
             "最小化",
             "最大化",
             "關閉視窗",
-            "簡體中文",
+            // 语言选项的显示名称始终固定，不随当前语言变化
+            "简体中文",
             "繁體中文",
             "語言",
             "視窗",
