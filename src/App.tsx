@@ -42,6 +42,10 @@ interface ChatWindow {
   accumulatedContent: string;
   /** 流式累积思考内容（推理模型的 thinking 过程） */
   accumulatedReasoning: string;
+  /** 思考结束时间（首个正文 chunk 到达时的 duration_ms），用于计算思考耗时 */
+  reasoningEndTime?: number;
+  /** 思考阶段耗时（毫秒），即从请求开始到正文内容首次输出的时间 */
+  reasoningDuration?: number;
 }
 
 /** 流式 chunk 事件 */
@@ -77,6 +81,7 @@ function App() {
       status: "idle",
       accumulatedContent: "",
       accumulatedReasoning: "",
+      reasoningEndTime: undefined,
       completionTps: undefined,
       promptTps: undefined,
     }))
@@ -144,20 +149,29 @@ function App() {
               status: payload.error ? ("error" as const) : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
+              /** 思考耗时：首个正文 chunk 到达时的 duration_ms，无正文则等于总耗时 */
+              reasoningDuration: w.reasoningEndTime ?? payload.duration_ms,
               completionTps: payload.completion_tokens_per_second ?? undefined,
               promptTps: payload.prompt_tokens_per_second ?? undefined,
               accumulatedContent: "",
               accumulatedReasoning: "",
+              reasoningEndTime: undefined,
             };
           } else {
             // 流式 chunk：分别累积正文和思考内容
             const newAccumulated = w.accumulatedContent + payload.content;
             const newAccumulatedReasoning =
               (w.accumulatedReasoning || "") + (payload.reasoning_content || "");
+            // 记录思考结束时间：当正文内容首次出现时，记录当前耗时作为思考结束时间
+            const newReasoningEndTime =
+              w.reasoningEndTime === undefined && payload.content.length > 0
+                ? payload.duration_ms
+                : w.reasoningEndTime;
             return {
               ...w,
               accumulatedContent: newAccumulated,
               accumulatedReasoning: newAccumulatedReasoning,
+              reasoningEndTime: newReasoningEndTime,
               status: "sending" as const,
             };
           }
@@ -187,6 +201,7 @@ function App() {
           status: "idle" as const,
           accumulatedContent: "",
           accumulatedReasoning: "",
+          reasoningEndTime: undefined,
           completionTps: undefined,
           promptTps: undefined,
         })
@@ -245,6 +260,7 @@ function App() {
         promptTps: undefined,
         accumulatedContent: "",
         accumulatedReasoning: "",
+        reasoningEndTime: undefined,
       }))
     );
   };
@@ -359,6 +375,15 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
     }
   };
 
+  /** 格式化时间：毫秒 → 秒（保留1位小数）或毫秒 */
+  const formatDuration = (ms?: number): string => {
+    if (ms === undefined || ms <= 0) return "";
+    if (ms >= 1000) {
+      return `${(ms / 1000).toFixed(1)}s`;
+    }
+    return `${ms}ms`;
+  };
+
   return (
     <div className={`chat-window status-${win.status}`}>
       <div className="chat-header">
@@ -381,7 +406,10 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
             {/* 已完成的思考过程（显示在正文上方） */}
             {msg.reasoningContent && (
               <details className="reasoning-details">
-                <summary className="reasoning-summary">{t("chat.reasoningSummary")}</summary>
+                <summary className="reasoning-summary">
+                  <span>{t("chat.reasoningSummary")}</span>
+                  <span className="reasoning-duration"> · {formatDuration(win.reasoningDuration)}</span>
+                </summary>
                 <div className="reasoning-content-text">{msg.reasoningContent}</div>
               </details>
             )}

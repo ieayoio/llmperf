@@ -345,6 +345,14 @@ html, body, #root {
   content: "▾ ";
 }
 
+/* 思考摘要行中的耗时显示 */
+.reasoning-duration {
+  color: #888;
+  font-size: 10px;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
 /* 折叠面板内容 */
 .reasoning-details > .reasoning-content-text {
   font-size: 12px;
