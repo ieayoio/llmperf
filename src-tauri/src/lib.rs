@@ -59,14 +59,10 @@ async fn send_concurrent_request(
 /// 在 Linux/GTK 上，直接修改菜单项文本不一定能触发 UI 刷新，
 /// 因此采用重建整个菜单的方式来确保文本正确更新。
 fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
-    // 获取当前语言菜单项的勾选状态
-    let lang_items = app.state::<crate::menu::LangItems<R>>();
-    let is_zh_checked = lang_items.zh.is_checked().unwrap_or(true);
-
     // 移除旧菜单（会同时移除所有窗口上的旧菜单）
     let _ = app.remove_menu();
 
-    // 创建新菜单
+    // 创建新菜单，create_menu 会根据 lang 参数正确设置勾选状态
     match menu::create_menu(app, lang) {
         Ok((new_menu, new_zh, new_en)) => {
             // 应用新菜单
@@ -74,10 +70,6 @@ fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
                 eprintln!("[menu] 设置新菜单失败: {}", e);
                 return;
             }
-
-            // 恢复勾选状态（create_menu 根据 lang 参数设置，但需要确保一致）
-            let _ = new_zh.item.set_checked(is_zh_checked);
-            let _ = new_en.item.set_checked(!is_zh_checked);
 
             // 将新的语言菜单项注册到 app state
             app.manage(crate::menu::LangItems {
@@ -108,8 +100,6 @@ pub fn run() {
                 zh: lang_zh.item.clone(),
                 en: lang_en.item.clone(),
             });
-
-            // 将语言项的 Arc 引用克隆到闭包中（保留用于其他用途，语言切换由 rebuild_menu 处理）
 
             // 注册菜单事件处理器：处理语言切换 + 窗口操作
             app.on_menu_event(move |app, event| {
