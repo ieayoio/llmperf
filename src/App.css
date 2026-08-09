@@ -28,7 +28,7 @@ html, body, #root {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 0 12px 12px 12px;
+  padding: 0;
   gap: 0;
 }
 
@@ -43,10 +43,10 @@ html, body, #root {
 
 /* ====== 配置面板 ====== */
 .config-panel {
-  background: #1a1a20;
-  border: 1px solid #2a2a35;
-  border-radius: 10px;
-  padding: 16px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 12px 12px 12px;
   flex-shrink: 0;
 }
 
@@ -62,7 +62,7 @@ html, body, #root {
   display: flex;
   gap: 12px;
   align-items: flex-end;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .config-row:last-child {
