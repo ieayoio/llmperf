@@ -4,7 +4,7 @@
 
 A cross-platform desktop application based on [Tauri 2](https://tauri.app/) for **concurrent streaming request testing** of LLM APIs (compatible with OpenAI interface), allowing intuitive comparison of multiple request performances.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-3c873a?logo=tauri)
 ![React](https://img.shields.io/badge/React-19-61dafb?logo=react)
 ![Rust](https://img.shields.io/badge/Rust-1.80+-orange?logo=rust)

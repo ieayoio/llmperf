@@ -4,7 +4,7 @@
 
 一款基于 [Tauri 2](https://tauri.app/) 开发的跨平台桌面应用，用于对 LLM API（兼容 OpenAI 接口）进行**并发流式请求测试**，直观对比多路请求的表现。
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-3c873a?logo=tauri)
 ![React](https://img.shields.io/badge/React-19-61dafb?logo=react)
 ![Rust](https://img.shields.io/badge/Rust-1.80+-orange?logo=rust)
