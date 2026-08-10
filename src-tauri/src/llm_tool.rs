@@ -437,6 +437,9 @@ struct ChatChunk {
     /// 部分 API 在最后一个 chunk 中返回 usage
     #[serde(default)]
     usage: Option<Usage>,
+    /// 部分 API（如 vLLM）在最后一个 chunk 中返回 timings
+    #[serde(default)]
+    timings: Option<Timings>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,6 +468,8 @@ pub struct FinishInfo {
     pub reason: String,
     /// Token 使用量（需要 API 支持 stream_options.include_usage）
     pub usage: Option<Usage>,
+    /// Token 速度统计（vLLM 等 API 在最后一个 chunk 提供；优先于 usage + 时间戳反推）
+    pub timings: Option<Timings>,
 }
 
 /// 流式事件枚举 —— 调用方通过匹配此枚举处理不同的流式数据
@@ -649,6 +654,7 @@ impl ChatChunk {
                 return Some(StreamEvent::Finish(FinishInfo {
                     reason: finish_reason.clone(),
                     usage: self.usage.clone(),
+                    timings: self.timings.clone(),
                 }));
             }
         }
@@ -658,6 +664,7 @@ impl ChatChunk {
             return Some(StreamEvent::Finish(FinishInfo {
                 reason: String::new(),
                 usage: Some(usage),
+                timings: self.timings.clone(),
             }));
         }
 
@@ -919,6 +926,7 @@ mod tests {
         acc.feed(&StreamEvent::Finish(FinishInfo {
             reason: "stop".to_string(),
             usage: None,
+            timings: None,
         }));
 
         assert_eq!(acc.reasoning_content, "思考中");

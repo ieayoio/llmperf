@@ -1,24 +1,51 @@
-use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent, FinishInfo};
+use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent, FinishInfo, Timings};
 use crate::types::{LLMRequestConfig, SingleResult, StreamChunkEvent};
 use tauri::Emitter;
 use tokio_util::sync::CancellationToken;
 
-/// 根据 usage 与两个时间点计算 token/s。
+/// 根据 timings / usage 计算 token/s。
 ///
-/// 参数语义：
-/// - `total_duration_ms`: 整个请求的总耗时（毫秒），包含网络握手、prefill、补全阶段
-/// - `first_content_at_ms`: 首个正文 ContentDelta 到达的时间点（毫秒），
-///   None 表示无法区分 prefill 阶段（例如流立即断开或模型在 prefill 后未返回正文）
+/// ## 数据源优先级
+/// 1. **timings**（vLLM 等 API 在最后一个流式 chunk 给出，权威）
+///    - `prompt_tps = timings.prompt_per_second`（基于 `prompt_n`，已扣除 cache 命中）
+///    - `completion_tps = timings.predicted_per_second`（基于 `predicted_n` + `predicted_ms`）
+/// 2. **退化路径**（timings 缺失）：用 `usage` + 时间戳反推
+///    - `completion_tps = usage.completion_tokens / (total - prefill)`
+///    - `prompt_tps = usage.prompt_tokens / prefill`，**仅在能区分 prefill 时**返回，
+///      否则 None —— 否则 `prompt_tokens / total` 会得到与 completion_tps 几乎一样的数值，
+///      完全没有参考意义（B1 修复的根源）
 ///
-/// 返回值：
-/// - `completion_tokens_per_second`: 优先用 `total - prefill` 算补全速度；退化用 total
-/// - `prompt_tokens_per_second`: 必须能区分 prefill 时长才有意义，否则 None
-///   （否则数值会接近 completion_tps，参考价值为零 —— 这就是 B1 修的根源）
+/// ## 为什么 prompt_tps 不能简单用 usage.prompt_tokens
+/// `usage.prompt_tokens` 通常包含 `prompt_tokens_details.cached_tokens`（cache 命中不计费），
+/// 而 `timings.prompt_n` 才是真实参与计算的 token 数。两者直接相除会得到 4-5 倍的偏高估计。
+///
+/// ## 参数语义
+/// - `timings`: API 在最后一个 chunk 给出的真实速度字段（vLLM 兼容）
+/// - `usage`: API 给出的 token 使用量（兜底数据源）
+/// - `total_duration_ms`: 整个请求的总耗时，包含网络握手、prefill、补全阶段
+/// - `first_content_at_ms`: 首个正文 ContentDelta 到达的时间点，
+///   None 表示无法区分 prefill 阶段
+///
+/// ## 返回
+/// - `completion_tokens_per_second`: 补全阶段 token/s
+/// - `prompt_tokens_per_second`: Prompt 阶段 token/s（无法可靠计算时为 None）
 pub(crate) fn calc_tokens_per_second(
+    timings: Option<&Timings>,
     usage: Option<&crate::llm_tool::Usage>,
     total_duration_ms: u128,
     first_content_at_ms: Option<u128>,
 ) -> (Option<f64>, Option<f64>) {
+    // === 优先：timings（vLLM 风格） ===
+    if let Some(t) = timings {
+        let completion_tps = t.completion_tokens_per_second();
+        let prompt_tps = t.prompt_tokens_per_second();
+        // timings 中任一值非 0 即视为有效；两者都缺失才退化
+        if completion_tps.is_some() || prompt_tps.is_some() {
+            return (completion_tps, prompt_tps);
+        }
+    }
+
+    // === 退化路径：usage + 时间戳反推 ===
     let Some(usage) = usage else {
         return (None, None);
     };
@@ -33,6 +60,8 @@ pub(crate) fn calc_tokens_per_second(
         None
     };
     // prompt 阶段：必须有合法的 prefill 时间点（> 0 且 ≤ 总耗时）才能算，否则置 None
+    // 注意：使用 usage.prompt_tokens（包含 cache）会有偏差，但比完全无数据好。
+    // 真实场景下应优先走 timings 路径避开此问题。
     let prompt_tps = match first_content_at_ms {
         Some(prefill_ms)
             if prefill_ms > 0 && prefill_ms <= total_duration_ms && usage.prompt_tokens > 0 =>
@@ -291,11 +320,10 @@ pub async fn execute_stream_request(
     }
 
     // 7. 计算 token 速度
-    //    - completion_tps: 优先用 prefill 后到结束的耗时，没有则用总耗时
-    //    - prompt_tps: 仅在能区分 prefill 阶段时计算（prefill 耗时 ≈ 首字延迟），
-    //      否则为 None —— 用总耗时反推会得到与 completion_tps 几乎一样的数值，没有参考意义
+    //    优先使用 timings（vLLM 等 API 在流末尾提供），其次退化到 usage + 时间戳反推
     let total_duration_ms = start.elapsed().as_millis();
     let (completion_tps, prompt_tps) = calc_tokens_per_second(
+        finish_info.as_ref().and_then(|i| i.timings.as_ref()),
         finish_info.as_ref().and_then(|i| i.usage.as_ref()),
         total_duration_ms,
         first_content_at_ms,
@@ -358,7 +386,7 @@ mod tests {
         // 假设 prefill 300ms（30 tokens），补全 1500ms（150 tokens），
         // 总耗时 1800ms。
         let u = usage(30, 150);
-        let (comp, prompt) = calc_tokens_per_second(Some(&u), 1800, Some(300));
+        let (comp, prompt) = calc_tokens_per_second(None, Some(&u), 1800, Some(300));
         // completion = 150 / 1.5 = 100 tok/s
         assert!((comp.unwrap() - 100.0).abs() < 0.01, "completion_tps 应对应补全阶段");
         // prompt = 30 / 0.3 = 100 tok/s，这里恰好相等但来源不同，是数学巧合；
@@ -375,7 +403,7 @@ mod tests {
     #[test]
     fn test_calc_tokens_per_second_no_prefill() {
         let u = usage(30, 150);
-        let (comp, prompt) = calc_tokens_per_second(Some(&u), 1800, None);
+        let (comp, prompt) = calc_tokens_per_second(None, Some(&u), 1800, None);
         assert!(comp.is_some(), "completion_tps 仍应可用总耗时推算");
         assert!(prompt.is_none(), "无 prefill 数据时 prompt_tps 必须为 None");
     }
@@ -383,7 +411,7 @@ mod tests {
     /// B2 关联测试：无 usage 时两个值都为 None。
     #[test]
     fn test_calc_tokens_per_second_no_usage() {
-        let (comp, prompt) = calc_tokens_per_second(None, 1000, Some(200));
+        let (comp, prompt) = calc_tokens_per_second(None, None, 1000, Some(200));
         assert!(comp.is_none());
         assert!(prompt.is_none());
     }
@@ -392,7 +420,7 @@ mod tests {
     #[test]
     fn test_calc_tokens_per_second_prefill_greater_than_total() {
         let u = usage(10, 100);
-        let (comp, prompt) = calc_tokens_per_second(Some(&u), 500, Some(800));
+        let (comp, prompt) = calc_tokens_per_second(None, Some(&u), 500, Some(800));
         // completion 用 500ms：100/0.5 = 200
         assert!((comp.unwrap() - 200.0).abs() < 0.01);
         assert!(prompt.is_none(), "prefill > total 是异常，不该输出 prompt_tps");
@@ -402,8 +430,55 @@ mod tests {
     #[test]
     fn test_calc_tokens_per_second_zero_tokens() {
         let u = usage(0, 0);
-        let (comp, prompt) = calc_tokens_per_second(Some(&u), 1000, Some(200));
+        let (comp, prompt) = calc_tokens_per_second(None, Some(&u), 1000, Some(200));
         assert!(comp.is_none());
         assert!(prompt.is_none());
+    }
+
+    /// 真实场景：有 timings 时应优先使用 timings 中的速度（vLLM 风格 API），
+    /// 即使 usage + 时间戳反推会得出不同结果。模拟 API 返回：
+    ///   timings.prompt_per_second = 40.94, predicted_per_second = 38.63
+    ///   usage.prompt_tokens = 18（含 14 cache），completion_tokens = 42
+    ///   first_content_at_ms = 97（prefill）
+    ///   total_duration_ms = 1500
+    /// 退化路径会算：prompt_tps = 18/0.0977 = 184（偏高 4.5x）
+    /// timings 路径应当返回真实速度 40.94 / 38.63
+    #[test]
+    fn test_calc_tokens_per_second_prefer_timings() {
+        let timings = Timings {
+            prompt_n: 4,
+            prompt_ms: 97.702,
+            prompt_per_token_ms: 24.4,
+            prompt_per_second: 40.94,
+            predicted_n: 42,
+            predicted_ms: 1087.156,
+            predicted_per_token_ms: 25.88,
+            predicted_per_second: 38.63,
+        };
+        let usage = Usage {
+            prompt_tokens: 18,
+            completion_tokens: 42,
+            total_tokens: 60,
+        };
+        let (comp, prompt) = calc_tokens_per_second(
+            Some(&timings),
+            Some(&usage),
+            1500,
+            Some(97),
+        );
+        // 关键断言：使用 timings 真实值，而非退化路径的 184
+        assert!((comp.unwrap() - 38.63).abs() < 0.01, "completion_tps 必须取 timings.predicted_per_second");
+        assert!((prompt.unwrap() - 40.94).abs() < 0.01, "prompt_tps 必须取 timings.prompt_per_second");
+    }
+
+    /// 边界：timings 字段全为 0（API 返回空 timings）时应退化到 usage 反推
+    #[test]
+    fn test_calc_tokens_per_second_timings_all_zero_falls_back() {
+        let timings = Timings::default(); // 全 0
+        let u = usage(30, 150);
+        let (comp, prompt) = calc_tokens_per_second(Some(&timings), Some(&u), 1800, Some(300));
+        // 退化路径：completion = 150/1.5 = 100，prompt = 30/0.3 = 100
+        assert!((comp.unwrap() - 100.0).abs() < 0.01);
+        assert!((prompt.unwrap() - 100.0).abs() < 0.01);
     }
 }
