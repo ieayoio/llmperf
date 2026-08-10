@@ -82,6 +82,61 @@ fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
     }
 }
 
+/// 对所有 webview 窗口执行同一操作
+fn for_each_window<R: Runtime, F>(app: &tauri::AppHandle<R>, mut f: F)
+where
+    F: FnMut(&tauri::WebviewWindow<R>),
+{
+    for window in app.webview_windows().values() {
+        f(window);
+    }
+}
+
+/// 切换应用语言：重建菜单并通知所有前端窗口
+fn switch_lang<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
+    rebuild_menu(app, lang);
+    for_each_window(app, |w| {
+        let _ = w.emit("language-changed", lang);
+    });
+}
+
+/// 退出应用
+fn quit_app<R: Runtime>(app: &tauri::AppHandle<R>) {
+    app.exit(0);
+}
+
+/// 最小化所有窗口
+fn minimize_all_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
+    for_each_window(app, |w| {
+        let _ = w.minimize();
+    });
+}
+
+/// 最大化或还原所有窗口
+fn toggle_maximize_all_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
+    for_each_window(app, |w| {
+        if w.is_maximized().unwrap_or(false) {
+            let _ = w.unmaximize();
+        } else {
+            let _ = w.maximize();
+        }
+    });
+}
+
+/// 关闭所有窗口
+fn close_all_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
+    for_each_window(app, |w| {
+        let _ = w.close();
+    });
+}
+
+/// 显示关于对话框（通过事件通知前端）
+fn show_about<R: Runtime>(app: &tauri::AppHandle<R>) {
+    for_each_window(app, |w| {
+        let _ = w.emit("menu-about", &());
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -105,71 +160,35 @@ pub fn run() {
             app.on_menu_event(move |app, event| {
                 let id = event.id();
 
-                // === 语言切换 ===
-                if *id == "lang-zh-SC" {
-                    // 重建菜单以同步文本
-                    rebuild_menu(&app, "zh-SC");
-                    // 通知所有前端窗口切换语言
-                    for window in app.webview_windows().values() {
-                        let _ = window.emit("language-changed", "zh-SC");
-                    }
-                } else if *id == "lang-zh-TC" {
-                    // 重建菜单以同步文本
-                    rebuild_menu(&app, "zh-TC");
-                    // 通知所有前端窗口切换语言
-                    for window in app.webview_windows().values() {
-                        let _ = window.emit("language-changed", "zh-TC");
-                    }
-                } else if *id == "lang-en" {
-                    // 重建菜单以同步文本
-                    rebuild_menu(&app, "en");
-                    // 通知所有前端窗口切换语言
-                    for window in app.webview_windows().values() {
-                        let _ = window.emit("language-changed", "en");
-                    }
-                }
-                // === 应用菜单 ===
-                if *id == "about" {
-                    // 显示关于对话框（通过事件通知前端）
-                    for window in app.webview_windows().values() {
-                        let _ = window.emit("menu-about", &());
-                    }
-                } else if *id == "quit" {
-                    // 退出应用
-                    app.exit(0);
-                } else {
+                match id.as_ref() {
+                    // === 语言切换 ===
+                    "lang-zh-SC" => switch_lang(app, "zh-SC"),
+                    "lang-zh-TC" => switch_lang(app, "zh-TC"),
+                    "lang-en" => switch_lang(app, "en"),
+
+                    // === 应用菜单 ===
+                    "about" => show_about(app),
+                    "quit" => quit_app(app),
+
+                    // === 窗口操作 ===
+                    "win-minimize" => minimize_all_windows(app),
+                    "win-maximize" => toggle_maximize_all_windows(app),
+                    "win-close" => close_all_windows(app),
+
+                    // === macOS 专属 ===
                     #[cfg(target_os = "macos")]
-                    if *id == "hide" {
-                        // macOS: 隐藏当前应用的所有窗口
-                        for window in app.webview_windows().values() {
-                            let _ = window.hide();
-                        }
-                    } else if *id == "hide-others" {
-                        // macOS: 隐藏其他应用
-                        let _ = app.hide_other();
-                    } else {
-                        // === 窗口操作 ===
-                        if *id == "win-minimize" {
-                            // 最小化所有窗口
-                            for window in app.webview_windows().values() {
-                                let _ = window.minimize();
-                            }
-                        } else if *id == "win-maximize" {
-                            // 最大化/还原所有窗口
-                            for window in app.webview_windows().values() {
-                                if window.is_maximized().unwrap_or(false) {
-                                    let _ = window.unmaximize();
-                                } else {
-                                    let _ = window.maximize();
-                                }
-                            }
-                        } else if *id == "win-close" {
-                            // 关闭所有窗口
-                            for window in app.webview_windows().values() {
-                                let _ = window.close();
-                            }
-                        }
+                    "hide" => {
+                        for_each_window(app, |w| {
+                            let _ = w.hide();
+                        });
                     }
+                    #[cfg(target_os = "macos")]
+                    "hide-others" => {
+                        let _ = app.hide_other();
+                    }
+
+                    // 未知 ID：忽略
+                    _ => {}
                 }
             });
 

@@ -220,7 +220,6 @@ function App() {
 
   const handleSend = async () => {
     if (!message.trim() || !baseURL.trim() || !apiKey.trim()) return;
-    if (concurrency < 1) return;
     const userMessage = message.trim();
 
     // 1) 构造发往后端的完整消息：基于 0 号窗口最新 messages 追加本轮 user。
@@ -335,7 +334,18 @@ function App() {
               min={1}
               max={50}
               value={concurrency}
-              onChange={(e) => setConcurrency(Number(e.target.value))}
+              // 将输入强制限制在 [1, 50]：空值、负数、超过 50 都会被 clamp 修正
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "") {
+                  // 输入框为空时先置 1（允许用户清空后再输入），避免出现 0 / NaN
+                  setConcurrency(1);
+                  return;
+                }
+                const n = Number(raw);
+                if (Number.isNaN(n)) return;
+                setConcurrency(Math.min(50, Math.max(1, Math.floor(n))));
+              }}
             />
           </div>
 
