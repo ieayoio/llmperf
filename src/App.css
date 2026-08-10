@@ -149,6 +149,23 @@ html, body, #root {
   border-color: #444;
 }
 
+/* 取消按钮（危险操作）：红色边框 + 红色文字，hover 时填充背景 */
+.btn-danger {
+  background: transparent;
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #ef4444;
+  color: #fff;
+}
+
+.btn-danger:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* ====== 聊天窗口网格 ====== */
 .chat-grid {
   display: grid;
@@ -197,6 +214,10 @@ html, body, #root {
   border-color: #ef4444;
 }
 
+.chat-window.status-canceled {
+  border-color: #94a3b8;
+}
+
 .chat-header {
   display: flex;
   justify-content: space-between;
@@ -229,6 +250,37 @@ html, body, #root {
 
 .chat-window.status-error .chat-status {
   color: #ef4444;
+}
+
+.chat-window.status-canceled .chat-status {
+  color: #94a3b8;
+}
+
+/* 聊天窗口头部右侧：状态文字 + 取消按钮并排 */
+.chat-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 单窗口"取消"按钮：小尺寸，红色描边，复用 btn-danger 颜色但更紧凑 */
+.btn-cancel-window {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid #ef4444;
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-cancel-window:hover {
+  background: #ef4444;
+  color: #fff;
 }
 
 /* ====== 消息区域 ====== */
@@ -404,6 +456,17 @@ html, body, #root {
   background: #1c1016;
   border: 1px solid #ef444433;
   color: #fca5a5;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+/* 取消提示横幅：灰色调，区别于错误（红色） */
+.chat-canceled {
+  align-self: flex-start;
+  background: #1a1d23;
+  border: 1px solid #94a3b833;
+  color: #94a3b8;
   padding: 8px 12px;
   border-radius: 8px;
   font-size: 12px;

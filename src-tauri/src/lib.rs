@@ -2,6 +2,7 @@
 mod types;
 mod request;
 mod concurrent;
+mod cancel;
 mod llm_tool;
 mod menu;
 
@@ -50,6 +51,25 @@ async fn send_concurrent_request(
     concurrency: usize,
 ) -> Vec<SingleResult> {
     concurrent::run_concurrent_requests(app, config, concurrency).await
+}
+
+/// Tauri 命令：取消指定窗口的请求
+///
+/// 调用后，对应 `window_id` 的流式循环会立即退出，并向前端发出 `finished=true`
+/// 且带 `error="用户已取消"` 的 `stream_chunk` 事件，前端据此更新窗口状态。
+///
+/// 返回 `true` 表示该窗口存在并触发了取消；`false` 表示该窗口没有活跃请求。
+#[tauri::command]
+async fn cancel_request(app: tauri::AppHandle, window_id: usize) -> bool {
+    app.state::<cancel::CancelRegistry>().cancel(window_id).await
+}
+
+/// Tauri 命令：一次性取消所有正在执行的请求
+///
+/// 返回被取消的 `window_id` 列表，便于前端调试或统计。
+#[tauri::command]
+async fn cancel_all_requests(app: tauri::AppHandle) -> Vec<usize> {
+    app.state::<cancel::CancelRegistry>().cancel_all().await
 }
 
 /// 重建菜单栏：移除旧菜单并创建新菜单
@@ -141,7 +161,14 @@ fn show_about<R: Runtime>(app: &tauri::AppHandle<R>) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![send_concurrent_request, set_initial_language])
+        // 注册取消注册表（按 window_id 管理 CancellationToken）
+        .manage(cancel::CancelRegistry::new())
+        .invoke_handler(tauri::generate_handler![
+            send_concurrent_request,
+            set_initial_language,
+            cancel_request,
+            cancel_all_requests,
+        ])
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
             // 创建菜单，同时获取语言菜单项的 Arc 引用

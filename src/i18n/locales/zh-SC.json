@@ -25,7 +25,9 @@
     "sendMessage": "发送消息",
     "messagePlaceholder": "输入要测试的消息 (Enter 发送)",
     "send": "🚀 发送",
-    "clear": "🗑 清空"
+    "clear": "🗑 清空",
+    "cancel": "⛔ 取消",
+    "cancelAll": "⛔ 全部取消"
   },
   "status": {
     "idle": "⏸ 空闲",
@@ -33,6 +35,7 @@
     "sending_with_reasoning": "⏳ 发送中... (正文 {0} 字符, 思考 {1} 字符)",
     "done": "✅ 完成 ({0}ms{1}{2})",
     "error": "❌ {0}ms{1}{2}",
+    "canceled": "⛔ 已取消 ({0}ms)",
     "content": "正文",
     "reasoning": "思考",
     "completion_label": "Completion",
@@ -45,6 +48,7 @@
     "assistant": "🤖 模型",
     "reasoning": "💭 思考过程",
     "error": "错误:",
+    "canceled": "⛔ 用户已取消",
     "reasoningSummary": "💭 思考过程"
   },
   "language": {

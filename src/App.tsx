@@ -31,7 +31,7 @@ interface ChatWindow {
   /** 完整的对话历史（user/assistant 交替） */
   messages: ChatMessage[];
   /** 流式响应状态 */
-  status: "idle" | "sending" | "done" | "error";
+  status: "idle" | "sending" | "done" | "error" | "canceled";
   error?: string;
   duration?: number;
   /** 补全阶段 token 速度（每秒 token 数） */
@@ -139,6 +139,7 @@ function App() {
             // 每个窗口都把 assistant 消息写进自己的 messages 历史。
             // 配合 handleSend 中"每个窗口追加 user 消息"的设计，确保每个窗口
             // 都能完整看到"你 → AI"的对话流（多轮时也各自累积，不会丢历史）。
+            // 取消时也保留已流出的部分内容（accumulatedContent）作为可见输出。
             const nextMessages = [
               ...w.messages,
               {
@@ -151,16 +152,27 @@ function App() {
                   : {}),
               },
             ];
+            // 区分"取消"与"真正错误"：后端对取消统一使用中文文案
+            const isCanceled = payload.error === "用户已取消";
             return {
               ...w,
               messages: nextMessages,
-              status: payload.error ? ("error" as const) : ("done" as const),
+              status: payload.error
+                ? isCanceled
+                  ? ("canceled" as const)
+                  : ("error" as const)
+                : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
               /** 思考耗时：首个正文 chunk 到达时的 duration_ms，无正文则等于总耗时 */
               reasoningDuration: w.reasoningEndTime ?? payload.duration_ms,
-              completionTps: payload.completion_tokens_per_second ?? undefined,
-              promptTps: payload.prompt_tokens_per_second ?? undefined,
+              // 取消时清空 token 速度，避免显示误导性数字
+              completionTps: isCanceled
+                ? undefined
+                : payload.completion_tokens_per_second ?? undefined,
+              promptTps: isCanceled
+                ? undefined
+                : payload.prompt_tokens_per_second ?? undefined,
               accumulatedContent: "",
               accumulatedReasoning: "",
               reasoningEndTime: undefined,
@@ -285,6 +297,27 @@ function App() {
     );
   };
 
+  /** 取消指定窗口的后端请求；后端会发出 finished + 用户已取消 事件，状态由事件统一收敛 */
+  const cancelWindow = async (windowId: number) => {
+    try {
+      await invoke<boolean>("cancel_request", { windowId });
+    } catch (e) {
+      console.warn(`[llmperf] 取消窗口 ${windowId} 失败:`, e);
+    }
+  };
+
+  /** 取消所有正在执行的后端请求（整页一键停止） */
+  const cancelAll = async () => {
+    try {
+      await invoke<number[]>("cancel_all_requests");
+    } catch (e) {
+      console.warn("[llmperf] 全部取消失败:", e);
+    }
+  };
+
+  /** 当前是否有窗口正在发送，用于控制"全部取消"按钮的可用性 */
+  const anySending = windows.some((w) => w.status === "sending");
+
   return (
     <div className="app-container">
       {/* 使用 currentLang 触发语言切换时的重新渲染 */}
@@ -366,6 +399,14 @@ function App() {
             <button className="btn btn-primary" onClick={handleSend}>
               {t("config.send")}
             </button>
+            {/* 全部取消：仅在有窗口处于 sending 时才可点击，避免无意义操作 */}
+            <button
+              className="btn btn-danger"
+              onClick={cancelAll}
+              disabled={!anySending}
+            >
+              {t("config.cancelAll")}
+            </button>
             <button className="btn btn-secondary" onClick={clearAllWindows}>
               {t("config.clear")}
             </button>
@@ -376,7 +417,11 @@ function App() {
       {/* ====== 底部聊天窗口区域 ====== */}
       <div className={`chat-grid cols-${concurrency}`}>
         {windows.map((win) => (
-          <ChatWindow key={win.id} window={win} />
+          <ChatWindow
+            key={win.id}
+            window={win}
+            onCancel={() => cancelWindow(win.id)}
+          />
         ))}
       </div>
     </div>
@@ -384,7 +429,14 @@ function App() {
 }
 
 /* ====== 单个聊天窗口组件 ====== */
-function ChatWindow({ window: win }: { window: ChatWindow }) {
+function ChatWindow({
+  window: win,
+  onCancel,
+}: {
+  window: ChatWindow;
+  /** 用户点击"取消"按钮时触发，参数语义对应后端 window_id */
+  onCancel: () => void;
+}) {
   const statusLabel = () => {
     const contentLen = win.accumulatedContent.length;
     const reasoningLen = win.accumulatedReasoning.length;
@@ -403,6 +455,8 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
         return t("status.done", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")));
       case "error":
         return t("status.error", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")));
+      case "canceled":
+        return t("status.canceled", win.duration ?? 0);
     }
   };
 
@@ -419,7 +473,19 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
     <div className={`chat-window status-${win.status}`}>
       <div className="chat-header">
         <span className="chat-window-title">{t("chat.window", win.id + 1)}</span>
-        <span className="chat-status">{statusLabel()}</span>
+        <div className="chat-header-right">
+          <span className="chat-status">{statusLabel()}</span>
+          {/* 仅在 sending 时显示单窗口"取消"按钮，避免误触 */}
+          {win.status === "sending" && (
+            <button
+              className="btn-cancel-window"
+              onClick={onCancel}
+              title={t("config.cancel")}
+            >
+              {t("config.cancel")}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="chat-messages">
@@ -472,6 +538,12 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
         {win.status === "error" && win.error && (
           <div className="chat-error">
             <strong>{t("chat.error")}</strong> {win.error}
+          </div>
+        )}
+        {/* 取消提示：保留已流出的部分内容，再用浅色条说明这是被取消的输出 */}
+        {win.status === "canceled" && (
+          <div className="chat-canceled">
+            <strong>{t("chat.canceled")}</strong>
           </div>
         )}
       </div>

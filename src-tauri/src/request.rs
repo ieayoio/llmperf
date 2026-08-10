@@ -1,6 +1,7 @@
 use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent, FinishInfo};
 use crate::types::{LLMRequestConfig, SingleResult, StreamChunkEvent};
 use tauri::Emitter;
+use tokio_util::sync::CancellationToken;
 
 /// 根据 usage 与两个时间点计算 token/s。
 ///
@@ -120,6 +121,25 @@ fn emit_finished(
     });
 }
 
+/// 发送"用户取消"完成事件：复用 finished 通道，前端走现有 error 分支
+fn emit_canceled(
+    app: &tauri::AppHandle,
+    window_id: usize,
+    start: std::time::Instant,
+) {
+    let _ = app.emit("stream_chunk", StreamChunkEvent {
+        target_window_id: window_id,
+        content: String::new(),
+        reasoning_content: None,
+        finished: true,
+        // 用统一的"用户已取消"文案，便于前端展示
+        error: Some("用户已取消".to_string()),
+        duration_ms: start.elapsed().as_millis(),
+        completion_tokens_per_second: None,
+        prompt_tokens_per_second: None,
+    });
+}
+
 /// 将前端传入的 `ChatMessage` (简单结构) 转换为 `LlmClient` 的 `ChatMessage` (带角色枚举)
 ///
 /// 透传 `reasoning_content` 字段：部分推理模型（如 deepseek-reasoner）在多轮对话时
@@ -153,10 +173,16 @@ fn convert_messages(messages: &[crate::types::ChatMessage]) -> Vec<ChatMessage> 
 /// 2. 调用 `client.chat_stream()` 获取事件流
 /// 3. 逐事件转换为 `StreamChunkEvent` 推送给前端
 /// 4. 返回聚合的完整内容
+///
+/// ## 取消语义
+/// 在事件循环中同时监听 `rx.recv()` 与 `cancel_token.cancelled()`：
+/// - 若收到取消信号，立刻 break 循环并发出 `finished + 用户已取消` 事件
+/// - 已累积的正文/思考内容会保留在 `accumulated_*` 字段，前端可以读到部分输出
 pub async fn execute_stream_request(
     app: tauri::AppHandle,
     window_id: usize,
     config: LLMRequestConfig,
+    cancel_token: CancellationToken,
 ) -> SingleResult {
     let start = std::time::Instant::now();
 
@@ -212,45 +238,54 @@ pub async fn execute_stream_request(
         }
     };
 
-    // 6. 逐事件处理流式响应
+    // 6. 逐事件处理流式响应（同时监听取消信号）
     let mut accumulated_content = String::new();
     let mut accumulated_reasoning = String::new();
     let mut last_error: Option<String> = None;
     let mut finish_info: Option<FinishInfo> = None;
     // 首个正文 chunk 到达的时间（毫秒），用于估算 prefill 阶段的耗时
     let mut first_content_at_ms: Option<u128> = None;
+    // 是否被用户主动取消
+    let mut canceled = false;
 
-    while let Some(event_result) = rx.recv().await {
-        match event_result {
-            Ok(event) => match event {
-                StreamEvent::ReasoningDelta(s) => {
-                    // 推理模型的思考内容，推送给前端展示
-                    if !s.is_empty() {
-                        accumulated_reasoning.push_str(&s);
-                        emit_reasoning_chunk(&app, window_id, start, &s);
-                    }
-                }
-                StreamEvent::ContentDelta(s) => {
-                    // 正文回复内容，推送给前端
-                    if !s.is_empty() {
-                        // 首个正文到达时记录时间点，作为 prefill 阶段结束标志
-                        if first_content_at_ms.is_none() {
-                            first_content_at_ms = Some(start.elapsed().as_millis());
-                        }
-                        accumulated_content.push_str(&s);
-                        emit_chunk(&app, window_id, start, &s);
-                    }
-                }
-                StreamEvent::Finish(info) => {
-                    // 持续接收直到流结束（[DONE] 或断开），保留最后一次携带 usage 的 Finish 信息
-                    if info.usage.is_some() || finish_info.is_none() {
-                        finish_info = Some(info);
-                    }
-                }
-            },
-            Err(e) => {
-                last_error = Some(format!("流式事件解析失败: {e}"));
+    loop {
+        tokio::select! {
+            // 偏置：先检查取消信号，避免 cancel 后仍把 buffer 中的残余 chunk 推给前端
+            biased;
+            _ = cancel_token.cancelled() => {
+                canceled = true;
                 break;
+            }
+            event_result = rx.recv() => {
+                match event_result {
+                    Some(Ok(event)) => match event {
+                        StreamEvent::ReasoningDelta(s) => {
+                            if !s.is_empty() {
+                                accumulated_reasoning.push_str(&s);
+                                emit_reasoning_chunk(&app, window_id, start, &s);
+                            }
+                        }
+                        StreamEvent::ContentDelta(s) => {
+                            if !s.is_empty() {
+                                if first_content_at_ms.is_none() {
+                                    first_content_at_ms = Some(start.elapsed().as_millis());
+                                }
+                                accumulated_content.push_str(&s);
+                                emit_chunk(&app, window_id, start, &s);
+                            }
+                        }
+                        StreamEvent::Finish(info) => {
+                            if info.usage.is_some() || finish_info.is_none() {
+                                finish_info = Some(info);
+                            }
+                        }
+                    },
+                    Some(Err(e)) => {
+                        last_error = Some(format!("流式事件解析失败: {e}"));
+                        break;
+                    }
+                    None => break, // 流自然结束
+                }
             }
         }
     }
@@ -271,6 +306,22 @@ pub async fn execute_stream_request(
         "[llmperf] window={window_id} total_ms={} completion_tps={:?} prompt_tps={:?}",
         total_duration_ms, completion_tps, prompt_tps
     );
+
+    // 8. 根据是否被取消走不同的完成事件
+    if canceled {
+        // 取消：发送统一的"用户已取消"完成事件，error 字段会被前端当成错误状态展示
+        emit_canceled(&app, window_id, start);
+        return SingleResult {
+            window_id,
+            assistant_content: accumulated_content,
+            duration_ms: total_duration_ms,
+            completion_tokens_per_second: None,
+            prompt_tokens_per_second: None,
+            // 返回值的 error 也要带上"用户已取消"，便于调用方区分
+            error: Some("用户已取消".to_string()),
+            reasoning_content: Some(accumulated_reasoning),
+        };
+    }
 
     // 8. 发送完成事件（携带 token 速度）
     emit_finished(&app, window_id, start, completion_tps, prompt_tps);

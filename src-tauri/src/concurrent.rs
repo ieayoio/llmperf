@@ -1,9 +1,13 @@
+use crate::cancel::CancelRegistry;
 use crate::types::{LLMRequestConfig, SingleResult};
 use crate::request::execute_stream_request;
+use tauri::Manager;
 
 /// 并发执行多个 LLM 请求
 ///
 /// 为每个 window_id 创建独立的请求任务，等待所有任务完成后返回结果列表。
+/// 每个任务在启动时会从 `cancel_registry` 注册自己的 [`tokio_util::sync::CancellationToken`]，
+/// 请求完成后会从注册表注销。
 pub async fn run_concurrent_requests(
     app: tauri::AppHandle,
     config: LLMRequestConfig,
@@ -28,6 +32,10 @@ pub async fn run_concurrent_requests(
         })
         .collect();
 
+    // 取出取消注册表（app.state() 在并发场景下每调用一次返回的都是同一个内部 Arc）
+    let registry = app.state::<CancelRegistry>();
+    let registry = registry.inner().clone();
+
     // 启动所有并发任务
     let handles: Vec<_> = configs
         .into_iter()
@@ -35,8 +43,14 @@ pub async fn run_concurrent_requests(
             let app = app.clone();
             // 使用 config.window_id 而不是 enumerate 的索引
             let window_id = config.window_id;
+            let registry = registry.clone();
             tauri::async_runtime::spawn(async move {
-                execute_stream_request(app, window_id, config).await
+                // 为该窗口注册一个独立的取消 token
+                let token = registry.register(window_id).await;
+                let result = execute_stream_request(app, window_id, config, token).await;
+                // 请求结束（无论正常 / 错误 / 取消）后清理 token
+                registry.unregister(window_id).await;
+                result
             })
         })
         .collect();
