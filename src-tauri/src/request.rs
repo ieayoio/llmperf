@@ -10,7 +10,7 @@ fn emit_error(
     error: String,
 ) {
     let _ = app.emit("stream_chunk", StreamChunkEvent {
-        window_id,
+        target_window_id: window_id,
         content: String::new(),
         reasoning_content: None,
         finished: true,
@@ -29,7 +29,7 @@ fn emit_chunk(
     chunk: &str,
 ) {
     let _ = app.emit("stream_chunk", StreamChunkEvent {
-        window_id,
+        target_window_id: window_id,
         content: chunk.to_string(),
         reasoning_content: None,
         finished: false,
@@ -48,7 +48,7 @@ fn emit_reasoning_chunk(
     chunk: &str,
 ) {
     let _ = app.emit("stream_chunk", StreamChunkEvent {
-        window_id,
+        target_window_id: window_id,
         content: String::new(),
         reasoning_content: Some(chunk.to_string()),
         finished: false,
@@ -68,7 +68,7 @@ fn emit_finished(
     prompt_tps: Option<f64>,
 ) {
     let _ = app.emit("stream_chunk", StreamChunkEvent {
-        window_id,
+        target_window_id: window_id,
         content: String::new(),
         reasoning_content: None,
         finished: true,
@@ -80,16 +80,27 @@ fn emit_finished(
 }
 
 /// 将前端传入的 `ChatMessage` (简单结构) 转换为 `LlmClient` 的 `ChatMessage` (带角色枚举)
+///
+/// 透传 `reasoning_content` 字段：部分推理模型（如 deepseek-reasoner）在多轮对话时
+/// 要求 assistant 历史消息携带上一轮的推理链，否则会校验失败或答复降级。
 fn convert_messages(messages: &[crate::types::ChatMessage]) -> Vec<ChatMessage> {
     messages
         .iter()
         .map(|m| {
-            let role = match m.role.to_lowercase().as_str() {
+            let base = match m.role.to_lowercase().as_str() {
                 "system" => ChatMessage::system(&m.content),
                 "assistant" => ChatMessage::assistant(&m.content),
                 _ => ChatMessage::user(&m.content), // 默认 user
             };
-            role
+            // assistant 消息透传 reasoning_content；其他角色忽略
+            if matches!(base.role, crate::llm_tool::Role::Assistant) {
+                if let Some(r) = m.reasoning_content.as_deref() {
+                    if !r.is_empty() {
+                        return ChatMessage::assistant_with_reasoning(&m.content, r);
+                    }
+                }
+            }
+            base
         })
         .collect()
 }

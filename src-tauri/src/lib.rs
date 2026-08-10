@@ -8,7 +8,10 @@ mod menu;
 use tauri::{Emitter, Manager, Runtime};
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
-pub use llm_tool::{LlmClient, ClientConfig, ChatMessage, ChatParams, ChatCompletion, Role, StreamEvent, Timings};
+pub use llm_tool::{
+    ChatCompletion, ChatMessage, ChatParams, ClientConfig, LlmClient, LlmError, Role,
+    StreamAccumulator, StreamEvent, Timings,
+};
 use menu::LangItems;
 
 /// Tauri 命令：设置初始语言（用于同步菜单栏勾选状态）

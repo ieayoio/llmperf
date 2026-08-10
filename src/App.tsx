@@ -50,7 +50,8 @@ interface ChatWindow {
 
 /** 流式 chunk 事件 */
 interface StreamChunkPayload {
-  window_id: number;
+  /** 目标 React 窗口 ID（与 `ChatWindow.id` 对应），前端按此字段严格过滤 */
+  target_window_id: number;
   content: string;
   /** 思考/推理内容增量（推理模型特有） */
   reasoning_content?: string;
@@ -126,26 +127,33 @@ function App() {
 
       // 调试日志：打印完成事件的 token 速度
       if (payload.finished) {
-        console.log(`[llmperf] window=${payload.window_id} finished duration=${payload.duration_ms} completion_tps=${payload.completion_tokens_per_second} prompt_tps=${payload.prompt_tokens_per_second}`);
+        console.log(`[llmperf] window=${payload.target_window_id} finished duration=${payload.duration_ms} completion_tps=${payload.completion_tokens_per_second} prompt_tps=${payload.prompt_tokens_per_second}`);
       }
 
       setWindows((prev) =>
         prev.map((w) => {
-          if (w.id !== payload.window_id) return w;
+          // 严格按目标窗口 ID 过滤，忽略其他窗口的事件
+          if (w.id !== payload.target_window_id) return w;
 
           if (payload.finished) {
-            // 最终完成：追加 assistant 消息（正文 + 思考内容）
-            const assistantMsg: ChatMessage = {
-              role: "assistant",
-              content: w.accumulatedContent || (payload.error ? `错误: ${payload.error}` : ""),
-            };
-            // 如果有思考内容，也保存到消息中
-            if (w.accumulatedReasoning.length > 0) {
-              assistantMsg.reasoningContent = w.accumulatedReasoning;
-            }
+            // 每个窗口都把 assistant 消息写进自己的 messages 历史。
+            // 配合 handleSend 中"每个窗口追加 user 消息"的设计，确保每个窗口
+            // 都能完整看到"你 → AI"的对话流（多轮时也各自累积，不会丢历史）。
+            const nextMessages = [
+              ...w.messages,
+              {
+                role: "assistant" as const,
+                content:
+                  w.accumulatedContent ||
+                  (payload.error ? `错误: ${payload.error}` : ""),
+                ...(w.accumulatedReasoning.length > 0
+                  ? { reasoningContent: w.accumulatedReasoning }
+                  : {}),
+              },
+            ];
             return {
               ...w,
-              messages: [...w.messages, assistantMsg],
+              messages: nextMessages,
               status: payload.error ? ("error" as const) : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
@@ -212,32 +220,45 @@ function App() {
 
   const handleSend = async () => {
     if (!message.trim() || !baseURL.trim() || !apiKey.trim()) return;
+    if (concurrency < 1) return;
     const userMessage = message.trim();
 
-    // 使用函数式更新，获取最新状态后再追加用户消息并发送请求
-    const activeWindows = await new Promise<ChatWindow[]>((resolve) => {
-      setWindows((prev) => {
-        const updated = prev.map((w, i) =>
-          i < concurrency
-            ? { ...w, messages: [...w.messages, { role: "user" as const, content: userMessage }], status: "sending" as const, accumulatedContent: "", accumulatedReasoning: "", completionTps: undefined, promptTps: undefined }
-            : w
-        );
-        const active = updated.filter((w) => w.id < concurrency);
-        windowsRef.current = updated;
-        resolve(active);
-        return updated;
-      });
-    });
+    // 1) 构造发往后端的完整消息：基于 0 号窗口最新 messages 追加本轮 user。
+    //    先算出 fullMessages，再 setWindows，避免依赖 setState 异步时机导致漏发 user。
+    const baseMessages = windowsRef.current[0]?.messages ?? [];
+    const fullMessages = [
+      ...baseMessages,
+      { role: "user" as const, content: userMessage },
+    ];
 
-    // 为每个活跃的窗口发送请求
-    const promises = activeWindows.map((w) =>
+    // 2) 每个活跃窗口都把 user 消息追加到自己的 messages 历史。
+    //    每个窗口都展示完整的"你 → AI"对话轮次；多轮时每窗口各自累积（每轮只追加一次新 user）。
+    setWindows((prev) =>
+      prev.map((w, i) =>
+        i < concurrency
+          ? {
+              ...w,
+              messages: [...w.messages, { role: "user" as const, content: userMessage }],
+              status: "sending" as const,
+              accumulatedContent: "",
+              accumulatedReasoning: "",
+              completionTps: undefined,
+              promptTps: undefined,
+              error: undefined,
+            }
+          : w
+      )
+    );
+
+    // 3) 为每个活跃窗口发送一份请求，所有请求使用相同 messages，仅 window_id 不同用于后端分流
+    const promises = Array.from({ length: concurrency }).map((_, i) =>
       invoke<void>("send_concurrent_request", {
         config: {
           base_url: baseURL,
           api_key: apiKey,
           model: model,
-          messages: w.messages,
-          window_id: w.id,
+          messages: fullMessages,
+          window_id: i,
         },
         concurrency: 1,
       })
@@ -245,7 +266,7 @@ function App() {
 
     await Promise.all(promises);
     setMessage("");
-    // 不在这里更新状态，让 listen 回调处理所有状态变更
+    // 状态变更由 stream_chunk 事件回调统一处理
   };
 
   const clearAllWindows = () => {
@@ -426,7 +447,9 @@ function ChatWindow({ window: win }: { window: ChatWindow }) {
             </div>
           </div>
         )}
-        {/* 流式输出中的累积内容（尚未成为正式消息） */}
+        {/* 流式输出中的累积内容（尚未成为正式消息）。
+            每个窗口流式时都展示 accumulatedContent，finished 后 assistant 会被写入 messages，
+            且 accumulatedContent 会被清空，渲染自动切换到 messages 模式 */}
         {win.status === "sending" && win.accumulatedContent.length > 0 && (
           <div className="chat-msg assistant streaming">
             <div className="chat-msg-label">{t("chat.assistant")}</div>

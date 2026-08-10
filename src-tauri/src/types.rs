@@ -19,9 +19,15 @@ pub struct SingleResult {
 }
 
 /// 流式 chunk 事件
+///
+/// 该事件通过 Tauri `emit` 广播到所有 webview 窗口。前端收到后必须按 `target_window_id`
+/// 严格过滤，仅当 `event.payload.target_window_id === window.id` 时才消费。
+/// 后端目前只有一个 webview 窗口（主窗口），如未来拆分为多 webview，应改用
+/// `Emitter::emit_to(label, ...)` 仅发给对应的 webview。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StreamChunkEvent {
-    pub window_id: usize,
+    /// 目标 React 窗口 ID（前端 `ChatWindow.id`），用于前端过滤。
+    pub target_window_id: usize,
     /// 正文回复增量（非空时表示此事件为正文内容）
     pub content: String,
     /// 思考/推理内容增量（非空时表示此事件为思考过程）
@@ -55,4 +61,7 @@ pub struct LLMRequestConfig {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+    /// 思考/推理内容（推理模型在多轮对话时要求携带上一轮 assistant 的推理链）
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
 }

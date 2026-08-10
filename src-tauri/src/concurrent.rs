@@ -41,10 +41,27 @@ pub async fn run_concurrent_requests(
         })
         .collect();
 
-    // 等待所有任务完成
+    // 等待所有任务完成。任一任务 panic 不应让整个 Tauri 进程崩溃，
+    // 改为在结果中记录 panic 信息并继续返回其余结果。
+    // 注意：实际错误信息已通过 stream_chunk 事件发到前端，
+    // 这里的占位 SingleResult 仅为保证 Vec 长度对齐，便于调用方调试。
     let mut results = Vec::with_capacity(concurrency);
     for handle in handles {
-        results.push(handle.await.unwrap());
+        match handle.await {
+            Ok(r) => results.push(r),
+            Err(e) => {
+                eprintln!("[concurrent] 子任务 panic: {e}");
+                results.push(SingleResult {
+                    window_id: 0,
+                    assistant_content: String::new(),
+                    reasoning_content: None,
+                    duration_ms: 0,
+                    completion_tokens_per_second: None,
+                    prompt_tokens_per_second: None,
+                    error: Some(format!("并发任务异常退出: {e}")),
+                });
+            }
+        }
     }
 
     results

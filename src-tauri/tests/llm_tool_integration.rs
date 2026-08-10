@@ -1,11 +1,17 @@
 //! # LLM 工具类集成测试
 //!
-//! 本文件包含需要真实 API 配置的集成测试。
-//! 运行前请先修改上方的 `TEST_BASE_URL` 和 `TEST_API_KEY` 常量。
+//! 本文件包含需要真实 API 配置的集成测试。配置通过环境变量注入，
+//! **不要在源码中硬编码任何凭据**。
 //!
 //! ## 运行方式
 //!
 //! ```bash
+//! # 设置环境变量
+//! export LLMPERF_TEST_BASE_URL="http://127.0.0.1:16777/v1"
+//! export LLMPERF_TEST_API_KEY="sk-xxxxxxxx"
+//! export LLMPERF_TEST_MODEL_CHAT="testllm-nk"
+//! export LLMPERF_TEST_MODEL_REASONER="testllm"
+//!
 //! # 运行所有集成测试
 //! cargo test --test llm_tool_integration
 //!
@@ -15,25 +21,32 @@
 //! # 运行思考模型相关测试
 //! cargo test --test llm_tool_integration -- reasoning
 //! ```
+//!
+//! 若任一必需环境变量缺失，该测试文件下的所有测试会被自动跳过（不 fail），
+//! 以便在 CI 等无 API 环境下保持绿灯。
 
 use llmperf_lib::*;
 
-// ========================================
-// 👇 在此填入你的大模型配置
-// ========================================
-const TEST_BASE_URL: &str = "http://127.0.0.1:16777/v1";  // ← 修改为你的 API 地址
-const TEST_API_KEY: &str = "sk-bL64JzHBLHJoiahD619Fx9D4KrM9cTq2rY3B0puH60VTbbgx";           // ← 修改为你的 API Key
-const TEST_MODEL_CHAT: &str = "myllm-nk";                // ← 聊天模型名称
-const TEST_MODEL_REASONER: &str = "myllm";        // ← 推理模型名称
-// ========================================
+/// 返回全部必需环境变量；任一缺失则整个测试文件 skip
+fn test_config() -> Option<(String, String, String, String)> {
+    let base_url = std::env::var("LLMPERF_TEST_BASE_URL").ok()?.trim().to_string();
+    let api_key = std::env::var("LLMPERF_TEST_API_KEY").ok()?.trim().to_string();
+    let chat = std::env::var("LLMPERF_TEST_MODEL_CHAT").ok()?.trim().to_string();
+    let reasoner = std::env::var("LLMPERF_TEST_MODEL_REASONER").ok()?.trim().to_string();
+    if base_url.is_empty() || api_key.is_empty() || chat.is_empty() || reasoner.is_empty() {
+        return None;
+    }
+    Some((base_url, api_key, chat, reasoner))
+}
 
-fn build_test_client() -> LlmClient {
+fn build_test_client() -> Option<LlmClient> {
+    let (base_url, api_key, _, _) = test_config()?;
     let config = ClientConfig {
-        base_url: TEST_BASE_URL.to_string(),
-        api_key: TEST_API_KEY.to_string(),
+        base_url,
+        api_key,
         timeout_secs: 120,
     };
-    LlmClient::new(config).expect("客户端创建失败，请检查配置是否正确")
+    LlmClient::new(config).ok()
 }
 
 fn build_test_messages() -> Vec<ChatMessage> {
@@ -43,14 +56,28 @@ fn build_test_messages() -> Vec<ChatMessage> {
     ]
 }
 
+fn chat_model() -> Option<String> {
+    test_config().map(|(_, _, c, _)| c)
+}
+
+fn reasoner_model() -> Option<String> {
+    test_config().map(|(_, _, _, r)| r)
+}
+
 // -------- 非流式调用 --------
 
 /// 非流式调用测试：验证能正常获取模型回复和思考内容
 #[tokio::test]
 async fn test_chat_non_stream() {
-    let client = build_test_client();
+    let Some(client) = build_test_client() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_CHAT 环境变量");
+        return;
+    };
+    let Some(model) = chat_model() else {
+        return;
+    };
     let params = ChatParams {
-        model: TEST_MODEL_CHAT.to_string(),
+        model,
         temperature: Some(0.7),
         max_tokens: Some(512),
         ..Default::default()
@@ -88,9 +115,15 @@ async fn test_chat_non_stream() {
 /// 流式调用测试：验证 SSE 逐 token 推送和事件解析
 #[tokio::test]
 async fn test_chat_stream() {
-    let client = build_test_client();
+    let Some(client) = build_test_client() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_CHAT 环境变量");
+        return;
+    };
+    let Some(model) = chat_model() else {
+        return;
+    };
     let params = ChatParams {
-        model: TEST_MODEL_CHAT.to_string(),
+        model,
         temperature: Some(0.7),
         max_tokens: Some(512),
         ..Default::default()
@@ -148,9 +181,15 @@ async fn test_chat_stream() {
 /// 使用 deepseek-reasoner 模型，该模型会输出思考过程
 #[tokio::test]
 async fn test_reasoning_model_non_stream() {
-    let client = build_test_client();
+    let Some(client) = build_test_client() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_REASONER 环境变量");
+        return;
+    };
+    let Some(model) = reasoner_model() else {
+        return;
+    };
     let params = ChatParams {
-        model: TEST_MODEL_REASONER.to_string(),
+        model,
         temperature: Some(0.6),
         max_tokens: Some(1024),
         ..Default::default()
@@ -186,9 +225,15 @@ async fn test_reasoning_model_non_stream() {
 /// 思考模型流式测试：验证推理过程中的 ReasoningDelta 事件
 #[tokio::test]
 async fn test_reasoning_model_stream() {
-    let client = build_test_client();
+    let Some(client) = build_test_client() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_REASONER 环境变量");
+        return;
+    };
+    let Some(model) = reasoner_model() else {
+        return;
+    };
     let params = ChatParams {
-        model: TEST_MODEL_REASONER.to_string(),
+        model,
         temperature: Some(0.6),
         max_tokens: Some(1024),
         ..Default::default()
@@ -242,7 +287,13 @@ async fn test_reasoning_model_stream() {
 /// 测试通过 extra 字段传入自定义参数（如 response_format）
 #[tokio::test]
 async fn test_chat_with_extra_params() {
-    let client = build_test_client();
+    let Some(client) = build_test_client() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_CHAT 环境变量");
+        return;
+    };
+    let Some(model) = chat_model() else {
+        return;
+    };
     let mut extra = serde_json::Map::new();
     extra.insert(
         "response_format".to_string(),
@@ -250,7 +301,7 @@ async fn test_chat_with_extra_params() {
     );
 
     let params = ChatParams {
-        model: TEST_MODEL_CHAT.to_string(),
+        model,
         extra,
         ..Default::default()
     };
@@ -274,9 +325,15 @@ async fn test_chat_with_extra_params() {
 /// 多轮对话测试：验证上下文消息的传递
 #[tokio::test]
 async fn test_chat_multi_turn() {
-    let client = build_test_client();
+    let Some(client) = build_test_client() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_CHAT 环境变量");
+        return;
+    };
+    let Some(model) = chat_model() else {
+        return;
+    };
     let params = ChatParams {
-        model: TEST_MODEL_CHAT.to_string(),
+        model,
         temperature: Some(0.7),
         max_tokens: Some(256),
         ..Default::default()
@@ -307,15 +364,19 @@ async fn test_chat_multi_turn() {
 /// 测试无效 API Key 时的错误处理
 #[tokio::test]
 async fn test_invalid_api_key_error() {
+    let Some((base_url, _, _, model)) = test_config() else {
+        eprintln!("[skip] 缺少 LLMPERF_TEST_BASE_URL / LLMPERF_TEST_API_KEY / LLMPERF_TEST_MODEL_CHAT 环境变量");
+        return;
+    };
     let config = ClientConfig {
-        base_url: TEST_BASE_URL.to_string(),
+        base_url,
         api_key: "sk-invalid-key-test".to_string(),
         timeout_secs: 30,
     };
     let client = LlmClient::new(config).expect("客户端创建失败");
 
     let params = ChatParams {
-        model: TEST_MODEL_CHAT.to_string(),
+        model,
         ..Default::default()
     };
     let messages = vec![ChatMessage::user("测试无效 key")];
@@ -345,7 +406,7 @@ async fn test_invalid_url_error() {
     let client = LlmClient::new(config).expect("客户端创建失败");
 
     let params = ChatParams {
-        model: TEST_MODEL_CHAT.to_string(),
+        model: "any".to_string(),
         ..Default::default()
     };
     let messages = vec![ChatMessage::user("测试网络错误")];
