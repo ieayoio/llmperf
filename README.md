@@ -111,35 +111,6 @@ npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
 
 发送后，每个窗口会独立接收流式响应，完成后显示总耗时。
 
-## 🏗 项目结构
-
-```
-llmperf/
-├── src/                      # React 前端
-│   ├── main.tsx              # 应用入口
-│   ├── App.tsx               # 主组件（并发流式请求逻辑）
-│   ├── App.css               # 暗色主题样式
-│   ├── i18n/                 # 国际化支持
-│   │   ├── index.ts          # i18n 配置
-│   │   └── locales/          # 语言包
-│   │       ├── zh.json       # 中文
-│   │       └── en.json       # 英文
-│   └── assets/               # 静态资源
-├── src-tauri/                # Tauri 后端 (Rust)
-│   ├── src/
-│   │   ├── main.rs           # Rust 入口
-│   │   └── lib.rs            # Tauri 命令 & 并发请求逻辑
-│   ├── Cargo.toml            # Rust 依赖
-│   ├── tauri.conf.json       # Tauri 配置
-│   └── build.rs              # 构建脚本
-├── index.html                # HTML 入口
-├── vite.config.ts            # Vite 配置
-├── tsconfig.json             # TypeScript 配置
-├── README.md                 # 中文文档
-├── README.en.md              # 英文文档
-└── package.json              # Node.js 依赖
-```
-
 ## 🔧 架构说明
 
 ```
