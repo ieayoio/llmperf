@@ -37,7 +37,7 @@ Supports Enter key for quick message sending, and one-click clear all windows.
 | Frontend Framework | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
 | Build Tool | [Vite 7](https://vitejs.dev/) |
 | Desktop Framework | [Tauri 2](https://tauri.app/) (Rust) |
-| HTTP Client | [async-openai](https://crates.io/crates/async-openai) (OpenAI compatible interface) |
+| HTTP Client | [reqwest](https://crates.io/crates/reqwest) (talks to OpenAI-compatible interface) |
 | Async Runtime | [tokio](https://tokio.rs/) (built into Tauri) |
 | Streaming Processing | [futures](https://crates.io/crates/futures) |
 
@@ -148,7 +148,7 @@ llmperf/
 │  ┌─────────────┐  invoke  ──────────────────────────▶ │  ┌───────────────────┐  │
 │  │  Config & UI  │                                     │  │  send_concurrent  │  │
 │  │  Message Input│  stream_chunk event ◀────────────── │  │  _request (Rust)  │  │
-│  │  Window Grid  │                                     │  │  (async-openai)   │  │
+│  │  Window Grid  │                                     │  │  (reqwest)       │  │
 │  └─────────────┘                                     │  └───────────────────┘  │
 │                                                      │          │               │
 │                                                      │          ▼               │

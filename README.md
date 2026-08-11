@@ -37,7 +37,7 @@
 | 前端框架 | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
 | 构建工具 | [Vite 7](https://vitejs.dev/) |
 | 桌面框架 | [Tauri 2](https://tauri.app/) (Rust) |
-| HTTP 客户端 | [async-openai](https://crates.io/crates/async-openai) (OpenAI 兼容接口) |
+| HTTP 客户端 | [reqwest](https://crates.io/crates/reqwest) (对接 OpenAI 兼容接口) |
 | 异步运行时 | [tokio](https://tokio.rs/) (Tauri 内置) |
 | 流式处理 | [futures](https://crates.io/crates/futures) |
 
@@ -148,7 +148,7 @@ llmperf/
 │  ┌─────────────┐  invoke  ────────────────────────▶ │  ┌───────────────────┐  │
 │  │  配置 & UI   │                                   │  │  send_concurrent  │  │
 │  │  消息输入    │  stream_chunk 事件 ◀───────────── │  │  _request (Rust)  │  │
-│  │  窗口网格    │                                   │  │  (async-openai)   │  │
+│  │  窗口网格    │                                   │  │  (reqwest)        │  │
 │  └─────────────┘                                   │  └───────────────────┘  │
 │                                                    │          │               │
 │                                                    │          ▼               │
