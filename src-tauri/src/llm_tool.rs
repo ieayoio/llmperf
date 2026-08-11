@@ -459,6 +459,9 @@ struct DeltaMessage {
     /// 思考内容增量（推理模型在思考阶段会持续输出此字段）
     #[serde(default)]
     reasoning_content: Option<String>,
+    /// 思考内容增量（部分 API 使用此字段名，如 OpenAI o1/o3 系列）
+    #[serde(default, alias = "reasoning")]
+    reasoning: Option<String>,
 }
 
 /// 流式结束信息
@@ -637,6 +640,12 @@ impl ChatChunk {
 
             // 优先处理思考内容增量（推理模型在思考阶段只输出此字段）
             if let Some(reasoning) = &delta.reasoning_content {
+                if !reasoning.is_empty() {
+                    return Some(StreamEvent::ReasoningDelta(reasoning.clone()));
+                }
+            }
+            // 兜底：部分 API 使用 `reasoning` 而非 `reasoning_content`
+            if let Some(reasoning) = &delta.reasoning {
                 if !reasoning.is_empty() {
                     return Some(StreamEvent::ReasoningDelta(reasoning.clone()));
                 }
@@ -932,6 +941,32 @@ mod tests {
         assert_eq!(acc.reasoning_content, "思考中");
         assert_eq!(acc.content, "你好世界");
         assert_eq!(acc.finish_reason, Some("stop".to_string()));
+    }
+
+    /// 测试流式 chunk 使用 `reasoning`（而非 `reasoning_content`）字段时能被识别为思考增量
+    #[test]
+    fn test_chat_chunk_reasoning_alias() {
+        let json = r#"{
+            "id": "chatcmpl-stream-1",
+            "object": "chat.completion.chunk",
+            "created": 1786084098,
+            "model": "LLM-AI-HEAT",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "reasoning": "Here's a thinking process:\n1. ..."
+                }
+            }]
+        }"#;
+
+        let chunk: ChatChunk = serde_json::from_str(json).unwrap();
+        let event = chunk.into_event();
+        match event {
+            Some(StreamEvent::ReasoningDelta(s)) => {
+                assert!(s.starts_with("Here's a thinking process"));
+            }
+            other => panic!("应解析为 ReasoningDelta，实际: {other:?}"),
+        }
     }
 
     #[test]
