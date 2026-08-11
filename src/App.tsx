@@ -236,9 +236,17 @@ function App() {
 
     // 1) 构造发往后端的完整消息：基于 0 号窗口最新 messages 追加本轮 user。
     //    先算出 fullMessages，再 setWindows，避免依赖 setState 异步时机导致漏发 user。
+    //    透传 assistant 消息的 reasoningContent：部分推理模型（如 deepseek-reasoner）
+    //    在多轮对话时要求携带上一轮 assistant 的推理链，否则会校验失败或答复降级。
     const baseMessages = windowsRef.current[0]?.messages ?? [];
     const fullMessages = [
-      ...baseMessages,
+      ...baseMessages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.reasoningContent && m.reasoningContent.length > 0
+          ? { reasoningContent: m.reasoningContent }
+          : {}),
+      })),
       { role: "user" as const, content: userMessage },
     ];
 

@@ -529,6 +529,8 @@ enum ParseAction {
     NeedMore,
     /// 收到 [DONE] 标记，流结束
     StreamEnd,
+    /// 解析成功但产出多条事件，仅返回首条；剩余事件应在下次解析时继续派发
+    Events(Vec<StreamEvent>),
 }
 
 /// SSE（Server-Sent Events）流解析器
@@ -540,6 +542,9 @@ struct SseParser {
     buffer: Vec<u8>,
     /// 流是否已读取完毕
     stream_ended: bool,
+    /// 同 chunk 解析出的剩余事件：当 `into_events` 产出多条事件（推理 + 正文），
+    /// 首条立即返回，其余缓存在这里，按顺序在下一次 `next_event` 中派发。
+    pending_events: Vec<StreamEvent>,
 }
 
 impl SseParser {
@@ -548,15 +553,27 @@ impl SseParser {
             stream,
             buffer: Vec::with_capacity(4096),
             stream_ended: false,
+            pending_events: Vec::new(),
         }
     }
 
     /// 异步获取下一个流式事件，返回 None 表示流结束
     async fn next_event(&mut self) -> Option<Result<StreamEvent>> {
         loop {
+            // 0) 先派发上一轮缓存的同 chunk 后续事件（推理+正文共存场景）
+            if !self.pending_events.is_empty() {
+                return Some(Ok(self.pending_events.remove(0)));
+            }
+
             // 第一步：尝试从缓冲区中解析出一个完整事件
             match self.try_parse_line() {
                 ParseAction::Event(e) => return Some(e),
+                ParseAction::Events(mut events) => {
+                    // 首条立即返回，其余缓存到 pending_events
+                    let first = events.remove(0);
+                    self.pending_events = events;
+                    return Some(Ok(first));
+                }
                 ParseAction::Skip => continue,       // 空行或无效行，继续解析
                 ParseAction::StreamEnd => return None, // [DONE] 标记
                 ParseAction::NeedMore => {}            // 需要更多数据，继续往下读
@@ -620,11 +637,16 @@ impl SseParser {
         }
 
         // 解析 JSON chunk 并转换为流式事件
+        // 一个 chunk 可能产出 0~N 个事件（推理 + 正文 + finish），需逐条发送。
         match serde_json::from_str::<ChatChunk>(data) {
-            Ok(chunk) => match chunk.into_event() {
-                Some(event) => ParseAction::Event(Ok(event)),
-                None => ParseAction::Skip, // chunk 中无有意义的数据
-            },
+            Ok(chunk) => {
+                let mut events = chunk.into_events();
+                match events.len() {
+                    0 => ParseAction::Skip, // chunk 中无有意义的数据
+                    1 => ParseAction::Event(Ok(events.remove(0))),
+                    _ => ParseAction::Events(events),
+                }
+            }
             Err(e) => ParseAction::Event(Err(LlmError::StreamParse(format!(
                 "JSON解析失败: {e}, 原始数据: {data}"
             )))),
@@ -634,33 +656,38 @@ impl SseParser {
 
 impl ChatChunk {
     /// 将原始 chunk 转换为语义化的流式事件
-    fn into_event(self) -> Option<StreamEvent> {
+    ///
+    /// 单个 chunk 可能同时携带思考增量与正文增量（例如推理模型思考刚结束的那一刻），
+    /// 因此返回 `Vec` 而非 `Option`：调用方按顺序派发多条事件即可保证两路内容都不丢失。
+    fn into_events(self) -> Vec<StreamEvent> {
+        let mut events = Vec::with_capacity(2);
+
         if let Some(choice) = self.choices.first() {
             let delta = &choice.delta;
 
             // 优先处理思考内容增量（推理模型在思考阶段只输出此字段）
             if let Some(reasoning) = &delta.reasoning_content {
                 if !reasoning.is_empty() {
-                    return Some(StreamEvent::ReasoningDelta(reasoning.clone()));
+                    events.push(StreamEvent::ReasoningDelta(reasoning.clone()));
                 }
-            }
-            // 兜底：部分 API 使用 `reasoning` 而非 `reasoning_content`
-            if let Some(reasoning) = &delta.reasoning {
+            } else if let Some(reasoning) = &delta.reasoning {
+                // 兜底：部分 API 使用 `reasoning` 而非 `reasoning_content`
+                // 仅在首选字段缺失时使用，避免同一 chunk 重复派发。
                 if !reasoning.is_empty() {
-                    return Some(StreamEvent::ReasoningDelta(reasoning.clone()));
+                    events.push(StreamEvent::ReasoningDelta(reasoning.clone()));
                 }
             }
 
-            // 正文内容增量
+            // 正文内容增量（与上方思考增量互不冲突，可同时派发）
             if let Some(content) = &delta.content {
                 if !content.is_empty() {
-                    return Some(StreamEvent::ContentDelta(content.clone()));
+                    events.push(StreamEvent::ContentDelta(content.clone()));
                 }
             }
 
             // 结束标记（附带 usage 信息）
             if let Some(finish_reason) = &choice.finish_reason {
-                return Some(StreamEvent::Finish(FinishInfo {
+                events.push(StreamEvent::Finish(FinishInfo {
                     reason: finish_reason.clone(),
                     usage: self.usage.clone(),
                     timings: self.timings.clone(),
@@ -669,15 +696,17 @@ impl ChatChunk {
         }
 
         // 某些 API 的最后一个 chunk 只包含 usage 而 choices 为空
-        if let Some(usage) = self.usage {
-            return Some(StreamEvent::Finish(FinishInfo {
-                reason: String::new(),
-                usage: Some(usage),
-                timings: self.timings.clone(),
-            }));
+        if events.is_empty() {
+            if let Some(usage) = self.usage {
+                events.push(StreamEvent::Finish(FinishInfo {
+                    reason: String::new(),
+                    usage: Some(usage),
+                    timings: self.timings.clone(),
+                }));
+            }
         }
 
-        None
+        events
     }
 }
 
@@ -960,12 +989,77 @@ mod tests {
         }"#;
 
         let chunk: ChatChunk = serde_json::from_str(json).unwrap();
-        let event = chunk.into_event();
-        match event {
-            Some(StreamEvent::ReasoningDelta(s)) => {
+        let events = chunk.into_events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StreamEvent::ReasoningDelta(s) => {
                 assert!(s.starts_with("Here's a thinking process"));
             }
             other => panic!("应解析为 ReasoningDelta，实际: {other:?}"),
+        }
+    }
+
+    /// BUG A 回归测试：同一 chunk 中 `reasoning_content` 与 `content` 同时存在时，
+    /// 两条内容都必须产出事件，不能因早返回而丢弃 `content`。
+    #[test]
+    fn test_chat_chunk_reasoning_and_content_coexist() {
+        let json = r#"{
+            "id": "chatcmpl-stream-2",
+            "object": "chat.completion.chunk",
+            "created": 1786084098,
+            "model": "LLM-AI-HEAT",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "reasoning_content": "尾句思考",
+                    "content": "正文第一段"
+                }
+            }]
+        }"#;
+
+        let chunk: ChatChunk = serde_json::from_str(json).unwrap();
+        let events = chunk.into_events();
+        assert_eq!(events.len(), 2, "应当同时派发 reasoning + content 两条事件");
+
+        let mut saw_reasoning = false;
+        let mut saw_content = false;
+        for ev in &events {
+            match ev {
+                StreamEvent::ReasoningDelta(s) if s == "尾句思考" => saw_reasoning = true,
+                StreamEvent::ContentDelta(s) if s == "正文第一段" => saw_content = true,
+                _ => {}
+            }
+        }
+        assert!(saw_reasoning, "应产生 ReasoningDelta(尾句思考)");
+        assert!(saw_content, "应产生 ContentDelta(正文第一段)");
+    }
+
+    /// 同 chunk 同时出现 `reasoning_content` 和 `reasoning` 时，业务层只取首个非空值
+    /// （`reasoning_content` 优先于 `reasoning` 别名），避免重复派发。
+    /// 真实场景下 API 不会同时给出两个相同语义的字段，本测试记录此行为约束。
+    #[test]
+    fn test_chat_chunk_reasoning_and_alias_dedup() {
+        let json = r#"{
+            "id": "chatcmpl-stream-3",
+            "object": "chat.completion.chunk",
+            "created": 1786084098,
+            "model": "LLM-AI-HEAT",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "reasoning_content": "权威字段",
+                    "reasoning": "兜底字段"
+                }
+            }]
+        }"#;
+
+        let chunk: ChatChunk = serde_json::from_str(json).unwrap();
+        let events = chunk.into_events();
+        // 业务策略：reasoning_content 优先，alias 仅在首选缺失时兜底。
+        assert_eq!(events.len(), 1, "同一字段不应被派发两次");
+        match &events[0] {
+            StreamEvent::ReasoningDelta(s) => assert_eq!(s, "权威字段"),
+            other => panic!("应为 ReasoningDelta，实际: {other:?}"),
         }
     }
 
