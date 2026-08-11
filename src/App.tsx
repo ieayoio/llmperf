@@ -108,10 +108,12 @@ function App() {
     syncLanguageToMenu();
   }, []);
 
-  // 监听关于对话框事件
+  // 监听关于对话框事件：弹出应用内模态框（不用 alert()，避免 Tauri WebView 在
+  // 系统对话框上追加 dev 服务器 URL，导致即使 release 也会显示 localhost 行）
+  const [showAbout, setShowAbout] = useState(false);
   useEffect(() => {
     const unlisten = listen<void>("menu-about", () => {
-      alert(`${t('app.title')}\n版本 0.1.0`);
+      setShowAbout(true);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -432,6 +434,35 @@ function App() {
           />
         ))}
       </div>
+
+      {/* 关于对话框：用应用内模态框，避免 Tauri 在 alert 上注入 localhost URL */}
+      {showAbout && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowAbout(false)}
+        >
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="modal-title">{t("app.title")}</h2>
+            <div className="modal-body">
+              {t("about.versionLabel")}: {t("about.version", "0.1.0")}
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowAbout(false)}
+                autoFocus
+              >
+                {t("about.ok")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

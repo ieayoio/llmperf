@@ -489,3 +489,43 @@ html, body, #root {
 .chat-messages::-webkit-scrollbar-thumb:hover {
   background: #555;
 }
+
+/* ====== 关于对话框（应用内模态框，替代 alert()） ====== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-dialog {
+  background: #1a1a1f;
+  border: 1px solid #2a2a32;
+  border-radius: 8px;
+  padding: 24px;
+  min-width: 280px;
+  max-width: 420px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #a78bfa;
+  margin-bottom: 12px;
+}
+
+.modal-body {
+  font-size: 14px;
+  color: #e4e4e7;
+  margin-bottom: 20px;
+  word-break: break-word;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}

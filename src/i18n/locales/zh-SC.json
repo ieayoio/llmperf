@@ -51,6 +51,11 @@
     "canceled": "⛔ 用户已取消",
     "reasoningSummary": "💭 思考过程"
   },
+  "about": {
+    "versionLabel": "版本",
+    "version": "{0}",
+    "ok": "确定"
+  },
   "language": {
     "label": "语言",
     "zh-SC": "简体中文",

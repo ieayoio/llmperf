@@ -51,6 +51,11 @@
     "canceled": "⛔ Canceled by user",
     "reasoningSummary": "💭 Thinking Process"
   },
+  "about": {
+    "versionLabel": "Version",
+    "version": "{0}",
+    "ok": "OK"
+  },
   "language": {
     "label": "Language",
     "zh-SC": "简体中文",
