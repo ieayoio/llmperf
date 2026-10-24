@@ -9,6 +9,17 @@ pub struct SingleResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     pub duration_ms: u128,
+    /// 首 token 延迟（毫秒）：从发起请求到首个增量（思考或正文）到达的时间。
+    ///
+    /// 请求在收到任何增量前就失败时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<u128>,
+    /// Prompt token 数（来自 `usage`，无 `usage` 时为 None）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    /// Completion token 数（来自 `usage`，包含思考 token）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
     /// 补全阶段 token 速度（每秒 token 数）
     ///
     /// 优先取 API 的 `timings`；无 `timings` 时用 `usage.completion_tokens`
@@ -41,6 +52,9 @@ pub struct StreamChunkEvent {
     pub finished: bool,
     pub error: Option<String>,
     pub duration_ms: u128,
+    /// 首 token 延迟（毫秒），仅在完成事件中携带
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<u128>,
     /// 补全阶段 token 速度（每秒 token 数，无数据时为 null）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_per_second: Option<f64>,
@@ -65,6 +79,16 @@ pub struct LLMRequestConfig {
     /// 因此需要允许调用方覆盖默认值。
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// 最大生成 token 数，None 表示使用服务端默认值
+    ///
+    /// 压测时必须固定输出长度，否则不同轮次的 tok/s 无法横向比较。
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// 采样温度，None 表示使用服务端默认值
+    ///
+    /// 可复现性测试建议设为 0。
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 /// 单条聊天消息
@@ -78,4 +102,83 @@ pub struct ChatMessage {
     /// 否则 serde 会静默忽略该字段，导致推理链永远不会被透传。
     #[serde(default, alias = "reasoningContent")]
     pub reasoning_content: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_result() -> SingleResult {
+        SingleResult {
+            window_id: 1,
+            assistant_content: String::new(),
+            reasoning_content: None,
+            duration_ms: 1200,
+            ttft_ms: Some(320),
+            prompt_tokens: Some(10),
+            completion_tokens: Some(50),
+            completion_tokens_per_second: Some(41.6),
+            prompt_tokens_per_second: None,
+            error: None,
+        }
+    }
+
+    /// 前端按 snake_case 字段名解析结果，序列化后不能变成 camelCase
+    #[test]
+    fn test_single_result_serializes_snake_case() {
+        let json = serde_json::to_value(sample_result()).unwrap();
+        assert_eq!(json["ttft_ms"], 320);
+        assert_eq!(json["prompt_tokens"], 10);
+        assert_eq!(json["completion_tokens"], 50);
+        assert!(json.get("prompt_tokens_per_second").is_none(), "None 字段应被省略");
+    }
+
+    /// 前端未配置采样参数时传 null，必须解析为 None（使用服务端默认值）
+    #[test]
+    fn test_request_config_accepts_null_sampling_params() {
+        let json = serde_json::json!({
+            "base_url": "http://127.0.0.1:16777/v1",
+            "api_key": "sk-test",
+            "model": "testllm",
+            "messages": [],
+            "window_id": 0,
+            "max_tokens": null,
+            "temperature": null
+        });
+        let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
+        assert!(config.max_tokens.is_none());
+        assert!(config.temperature.is_none());
+    }
+
+    /// 旧版前端不传采样参数时仍可解析（向后兼容）
+    #[test]
+    fn test_request_config_sampling_params_optional() {
+        let json = serde_json::json!({
+            "base_url": "http://127.0.0.1:16777/v1",
+            "api_key": "sk-test",
+            "model": "testllm",
+            "messages": [],
+            "window_id": 0
+        });
+        let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
+        assert!(config.max_tokens.is_none());
+        assert!(config.temperature.is_none());
+    }
+
+    /// 配置采样参数时应正确透传
+    #[test]
+    fn test_request_config_sampling_params_passed_through() {
+        let json = serde_json::json!({
+            "base_url": "http://127.0.0.1:16777/v1",
+            "api_key": "sk-test",
+            "model": "testllm",
+            "messages": [],
+            "window_id": 3,
+            "max_tokens": 256,
+            "temperature": 0.0
+        });
+        let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(config.max_tokens, Some(256));
+        assert_eq!(config.temperature, Some(0.0));
+    }
 }

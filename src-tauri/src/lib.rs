@@ -72,6 +72,41 @@ async fn cancel_all_requests(app: tauri::AppHandle) -> Vec<usize> {
     app.state::<cancel::CancelRegistry>().cancel_all().await
 }
 
+/// 校验导出文件名：只允许纯文件名
+///
+/// 拒绝空串、路径分隔符与上跳片段，防止被利用做任意路径写入。
+fn is_safe_export_filename(filename: &str) -> bool {
+    !filename.is_empty()
+        && !filename.contains('/')
+        && !filename.contains('\\')
+        && !filename.contains("..")
+}
+
+/// Tauri 命令：把文本内容写入系统下载目录，返回完整路径
+///
+/// 用于导出测试结果（CSV）。仅接受纯文件名：包含路径分隔符或上跳片段的
+/// 名字一律拒绝，避免被利用做任意路径写入。
+#[tauri::command]
+fn save_text_file(
+    app: tauri::AppHandle,
+    filename: String,
+    content: String,
+) -> Result<String, String> {
+    if !is_safe_export_filename(&filename) {
+        return Err("文件名不合法".to_string());
+    }
+
+    let dir = app
+        .path()
+        .download_dir()
+        .map_err(|e| format!("无法定位下载目录: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
+
+    let path = dir.join(&filename);
+    std::fs::write(&path, content).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(path.display().to_string())
+}
+
 /// 重建菜单栏：移除旧菜单并创建新菜单
 ///
 /// 在 Linux/GTK 上，直接修改菜单项文本不一定能触发 UI 刷新，
@@ -168,6 +203,7 @@ pub fn run() {
             set_initial_language,
             cancel_request,
             cancel_all_requests,
+            save_text_file,
         ])
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
@@ -223,4 +259,19 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 导出文件名只允许纯文件名，任何路径片段都必须被拒绝
+    #[test]
+    fn test_export_filename_validation() {
+        assert!(is_safe_export_filename("llmperf-20261024-153000.csv"));
+        assert!(!is_safe_export_filename(""));
+        assert!(!is_safe_export_filename("../evil.csv"));
+        assert!(!is_safe_export_filename("a/b.csv"));
+        assert!(!is_safe_export_filename("a\\b.csv"));
+    }
 }

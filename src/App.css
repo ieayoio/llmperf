@@ -166,6 +166,80 @@ html, body, #root {
   cursor: not-allowed;
 }
 
+/* ====== 本轮汇总面板 ====== */
+.summary-panel {
+  flex-shrink: 0;
+  margin: 0 12px 10px 12px;
+  padding: 8px 12px;
+  border: 1px solid #2a2a35;
+  border-radius: 8px;
+  background: #121216;
+}
+
+.summary-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.summary-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #a78bfa;
+  white-space: nowrap;
+}
+
+.summary-meta {
+  flex: 1;
+  font-size: 12px;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary-export {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.summary-table th {
+  text-align: right;
+  font-weight: 500;
+  color: #6b7280;
+  padding: 3px 8px;
+  border-bottom: 1px solid #2a2a35;
+}
+
+.summary-table th:first-child,
+.summary-table td:first-child {
+  text-align: left;
+  color: #9ca3af;
+}
+
+.summary-table td {
+  text-align: right;
+  padding: 3px 8px;
+  color: #e4e4e7;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
 /* ====== 聊天窗口网格 ====== */
 .chat-grid {
   display: grid;
@@ -181,12 +255,9 @@ html, body, #root {
 .chat-grid.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .chat-grid.cols-5 { grid-template-columns: 1fr 1fr 1fr 1fr 1fr; }
 
-/* 6个以上用 4 列 + 自动换行，超出部分滚动 */
-@media (min-width: 1200px) {
-  .chat-grid.cols-6,
-  .chat-grid.cols-7,
-  .chat-grid.cols-8 { grid-template-columns: repeat(4, 1fr); }
-}
+/* 6 个及以上：按可用宽度自适应列数（每列不小于 240px）。
+   之前对 9+ 没有定义列数，会回退成单列，50 并发时变成一条竖着的长列表 */
+.chat-grid.cols-auto { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 
 /* ====== 单个聊天窗口 ====== */
 .chat-window {

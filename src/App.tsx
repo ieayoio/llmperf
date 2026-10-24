@@ -46,6 +46,8 @@ interface ChatWindow {
   accumulatedReasoning: string;
   /** 思考结束时间（首个正文 chunk 到达时的 duration_ms），用于计算思考耗时 */
   reasoningEndTime?: number;
+  /** 首 token 延迟（毫秒） */
+  ttft?: number;
 }
 
 /** 流式 chunk 事件 */
@@ -58,10 +60,168 @@ interface StreamChunkPayload {
   finished: boolean;
   error: string | null;
   duration_ms: number;
+  /** 首 token 延迟（毫秒），仅完成事件携带 */
+  ttft_ms?: number | null;
   /** 补全阶段 token 速度（每秒 token 数，无数据时为 null） */
   completion_tokens_per_second?: number | null;
   /** Prompt 阶段 token 速度（每秒 token 数，无数据时为 null） */
   prompt_tokens_per_second?: number | null;
+}
+
+/** 后端 `SingleResult`（Rust 字段名原样序列化，故为 snake_case） */
+interface SingleResult {
+  window_id: number;
+  duration_ms: number;
+  /** 首 token 延迟（毫秒），收到首个增量前失败时缺失 */
+  ttft_ms?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  completion_tokens_per_second?: number;
+  prompt_tokens_per_second?: number;
+  error: string | null;
+}
+
+/** 一组数值的统计量（无有效数据时各字段缺失） */
+interface Stats {
+  avg?: number;
+  min?: number;
+  max?: number;
+  p50?: number;
+  p95?: number;
+}
+
+/** 一轮并发测试的汇总结果 */
+interface RunSummary {
+  concurrency: number;
+  /** 从发起请求到全部窗口结束的墙钟时间（毫秒） */
+  wallClockMs: number;
+  success: number;
+  failed: number;
+  canceled: number;
+  totalCompletionTokens: number;
+  /** 整体吞吐：本轮总 completion token / 墙钟秒数 */
+  throughput?: number;
+  ttft: Stats;
+  duration: Stats;
+  completionTps: Stats;
+  /** 逐窗口明细，供导出 CSV 使用 */
+  results: SingleResult[];
+}
+
+/** 取消态文案（与后端 `CANCELED_MESSAGE` 保持一致） */
+const CANCELED_MESSAGE = "用户已取消";
+
+/** 线性插值百分位：与 numpy.percentile 默认口径一致 */
+function percentileOfSorted(sorted: number[], p: number): number {
+  if (sorted.length === 1) return sorted[0];
+  const idx = (sorted.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
+/** 计算一组数值的均值、最小/最大与 P50/P95；空数组返回空对象 */
+function computeStats(values: number[]): Stats {
+  if (values.length === 0) return {};
+  const sorted = [...values].sort((a, b) => a - b);
+  return {
+    avg: sorted.reduce((sum, v) => sum + v, 0) / sorted.length,
+    min: sorted[0],
+    max: sorted[sorted.length - 1],
+    p50: percentileOfSorted(sorted, 0.5),
+    p95: percentileOfSorted(sorted, 0.95),
+  };
+}
+
+/** 把逐窗口结果聚合成一轮的汇总统计 */
+function summarizeRun(results: SingleResult[], wallClockMs: number): RunSummary {
+  const canceled = results.filter((r) => r.error === CANCELED_MESSAGE).length;
+  const failed = results.filter((r) => r.error && r.error !== CANCELED_MESSAGE).length;
+  // 只统计成功且有数值的样本，避免失败/取消把均值带偏
+  const succeeded = results.filter((r) => !r.error);
+  const samples = (pick: (r: SingleResult) => number | undefined) =>
+    succeeded
+      .map(pick)
+      .filter((v): v is number => typeof v === "number" && v > 0);
+
+  const totalCompletionTokens = results.reduce(
+    (sum, r) => sum + (r.completion_tokens ?? 0),
+    0
+  );
+
+  return {
+    concurrency: results.length,
+    wallClockMs,
+    success: results.length - failed - canceled,
+    failed,
+    canceled,
+    totalCompletionTokens,
+    throughput:
+      wallClockMs > 0 && totalCompletionTokens > 0
+        ? totalCompletionTokens / (wallClockMs / 1000)
+        : undefined,
+    ttft: computeStats(samples((r) => r.ttft_ms)),
+    duration: computeStats(samples((r) => r.duration_ms)),
+    completionTps: computeStats(samples((r) => r.completion_tokens_per_second)),
+    results,
+  };
+}
+
+/** CSV 字段转义：含逗号、引号或换行时用双引号包裹 */
+function csvCell(value: string | number | undefined | null): string {
+  if (value === undefined || value === null) return "";
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/** 生成逐窗口明细 CSV（表头固定英文，便于在 Excel / 脚本中复用） */
+function buildCsv(results: SingleResult[]): string {
+  const header = [
+    "window",
+    "status",
+    "ttft_ms",
+    "duration_ms",
+    "prompt_tokens",
+    "completion_tokens",
+    "completion_tps",
+    "prompt_tps",
+    "error",
+  ].join(",");
+
+  const rows = results.map((r) =>
+    [
+      r.window_id + 1,
+      r.error ? (r.error === CANCELED_MESSAGE ? "canceled" : "error") : "ok",
+      r.ttft_ms ?? "",
+      r.duration_ms,
+      r.prompt_tokens ?? "",
+      r.completion_tokens ?? "",
+      r.completion_tokens_per_second?.toFixed(2) ?? "",
+      r.prompt_tokens_per_second?.toFixed(2) ?? "",
+      r.error ?? "",
+    ]
+      .map(csvCell)
+      .join(",")
+  );
+
+  return [header, ...rows].join("\n");
+}
+
+/** 导出文件名：llmperf-YYYYMMDD-HHmmss.csv */
+function buildExportFilename(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `llmperf-${date}-${time}.csv`;
+}
+
+/** 解析可选数字输入：空串或非法值返回 null（交由后端使用服务端默认值） */
+function parseOptionalNumber(raw: string): number | null {
+  const text = raw.trim();
+  if (text === "") return null;
+  const value = Number(text);
+  return Number.isFinite(value) ? value : null;
 }
 
 function App() {
@@ -70,6 +230,16 @@ function App() {
   const [model, setModel] = useState("gpt-3.5-turbo");
   const [concurrency, setConcurrency] = useState(1);
   const [message, setMessage] = useState("");
+
+  // 采样参数：留空表示使用服务端默认值
+  // 压测时建议固定 max tokens（否则不同轮次的 tok/s 无法横向比较）
+  const [maxTokens, setMaxTokens] = useState("");
+  const [temperature, setTemperature] = useState("");
+
+  // 最近一轮的汇总结果（null 表示还没完成过一轮）
+  const [lastRun, setLastRun] = useState<RunSummary | null>(null);
+  // 导出提示：成功时为文件路径，失败时为错误原因
+  const [exportHint, setExportHint] = useState("");
 
   // 当前语言状态（用于触发 UI 重新渲染）
   const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
@@ -177,7 +347,8 @@ function App() {
                 : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
-              // 取消时清空 token 速度，避免显示误导性数字
+              // 取消时清空 token 速度与首字延迟，避免显示误导性数字
+              ttft: isCanceled ? undefined : payload.ttft_ms ?? undefined,
               completionTps: isCanceled
                 ? undefined
                 : payload.completion_tokens_per_second ?? undefined,
@@ -294,20 +465,33 @@ function App() {
     );
 
     // 3) 为每个活跃窗口发送一份请求，所有请求使用相同 messages，仅 window_id 不同用于后端分流
+    const startedAt = performance.now();
+    const maxTokensValue = parseOptionalNumber(maxTokens);
     const promises = Array.from({ length: concurrency }).map((_, i) =>
-      invoke<void>("send_concurrent_request", {
+      invoke<SingleResult[]>("send_concurrent_request", {
         config: {
           base_url: baseURL,
           api_key: apiKey,
           model: model,
           messages: fullMessages,
           window_id: i,
+          // 采样参数：null 表示不传，交给服务端默认值
+          max_tokens:
+            maxTokensValue === null ? null : Math.max(1, Math.round(maxTokensValue)),
+          temperature: parseOptionalNumber(temperature),
         },
         concurrency: 1,
       })
     );
 
-    await Promise.all(promises).catch((e) => {
+    try {
+      const responses = await Promise.all(promises);
+      // 每个 invoke 返回该窗口的结果数组，展平后得到本轮全部明细
+      const results = responses.reduce<SingleResult[]>((acc, r) => acc.concat(r), []);
+      if (results.length > 0) {
+        setLastRun(summarizeRun(results, performance.now() - startedAt));
+      }
+    } catch (e) {
       // 命令本身 reject（后端 panic、state 缺失等）时不会有任何流式事件到达，
       // 这里兜底把仍处于 sending 的窗口置为错误态，避免界面永久停在转圈状态
       setWindows((prev) =>
@@ -317,11 +501,14 @@ function App() {
             : w
         )
       );
-    });
+    }
     // 状态变更由 stream_chunk 事件回调统一处理
   };
 
   const clearAllWindows = () => {
+    // 清空对话的同时丢弃上一轮汇总，避免面板展示与窗口内容不一致
+    setLastRun(null);
+    setExportHint("");
     setWindows((prev) =>
       prev.map((w) => ({
         ...w,
@@ -353,6 +540,21 @@ function App() {
       await invoke<number[]>("cancel_all_requests");
     } catch (e) {
       console.warn("[llmperf] 全部取消失败:", e);
+    }
+  };
+
+  /** 把最近一轮逐窗口明细导出为 CSV（写入系统下载目录） */
+  const exportCsv = async () => {
+    if (!lastRun) return;
+    try {
+      // 加 BOM，让 Excel 正确识别 UTF-8（错误信息里可能有中文）
+      const path = await invoke<string>("save_text_file", {
+        filename: buildExportFilename(),
+        content: "\uFEFF" + buildCsv(lastRun.results),
+      });
+      setExportHint(t("summary.exported", path));
+    } catch (e) {
+      setExportHint(t("summary.exportFailed", String(e)));
     }
   };
 
@@ -396,6 +598,34 @@ function App() {
               placeholder={t("config.modelPlaceholder")}
               value={model}
               onChange={(e) => setModel(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* 采样参数：留空则使用服务端默认值。
+            压测时固定 max tokens，才能让不同轮次的 tok/s 具有可比性 */}
+        <div className="config-row">
+          <div className="config-field">
+            <label>{t("config.maxTokens")}</label>
+            <input
+              type="number"
+              min={1}
+              placeholder={t("config.maxTokensPlaceholder")}
+              value={maxTokens}
+              onChange={(e) => setMaxTokens(e.target.value)}
+            />
+          </div>
+
+          <div className="config-field">
+            <label>{t("config.temperature")}</label>
+            <input
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              placeholder={t("config.temperaturePlaceholder")}
+              value={temperature}
+              onChange={(e) => setTemperature(e.target.value)}
             />
           </div>
         </div>
@@ -460,8 +690,56 @@ function App() {
         </div>
       </div>
 
+      {/* ====== 本轮汇总（仅在有结果时显示） ====== */}
+      {lastRun && (
+        <div className="summary-panel">
+          <div className="summary-header">
+            <span className="summary-title">{t("summary.title")}</span>
+            <span className="summary-meta">
+              {t("summary.success", lastRun.success, lastRun.concurrency)}
+              {lastRun.canceled > 0 ? ` · ${t("summary.canceled", lastRun.canceled)}` : ""}
+              {lastRun.failed > 0 ? ` · ${t("summary.failed", lastRun.failed)}` : ""}
+              {` · ${t("summary.wallClock", (lastRun.wallClockMs / 1000).toFixed(2))}`}
+              {lastRun.throughput !== undefined
+                ? ` · ${t("summary.throughput", lastRun.throughput.toFixed(1))}`
+                : ""}
+            </span>
+            <button className="btn btn-secondary summary-export" onClick={exportCsv}>
+              {t("summary.export")}
+            </button>
+          </div>
+
+          <table className="summary-table">
+            <thead>
+              <tr>
+                <th>{t("summary.metric")}</th>
+                <th>{t("summary.avg")}</th>
+                <th>{t("summary.p50")}</th>
+                <th>{t("summary.p95")}</th>
+                <th>{t("summary.min")}</th>
+                <th>{t("summary.max")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <SummaryRow label={t("summary.ttft")} stats={lastRun.ttft} digits={0} />
+              <SummaryRow label={t("summary.duration")} stats={lastRun.duration} digits={0} />
+              <SummaryRow
+                label={t("summary.completionTps")}
+                stats={lastRun.completionTps}
+                digits={1}
+              />
+            </tbody>
+          </table>
+
+          {exportHint && <div className="summary-hint">{exportHint}</div>}
+        </div>
+      )}
+
       {/* ====== 底部聊天窗口区域 ====== */}
-      <div className={`chat-grid cols-${concurrency}`}>
+      {/* 1-5 个用固定列数保持紧凑；6 个以上改由 CSS 按可用宽度自适应列数 */}
+      <div
+        className={`chat-grid ${concurrency <= 5 ? `cols-${concurrency}` : "cols-auto"}`}
+      >
         {windows.map((win) => (
           <ChatWindow
             key={win.id}
@@ -503,6 +781,29 @@ function App() {
   );
 }
 
+/* ====== 汇总表格中的一行指标 ====== */
+function SummaryRow({
+  label,
+  stats,
+  digits,
+}: {
+  label: string;
+  stats: Stats;
+  digits: number;
+}) {
+  const fmt = (value?: number) => (value === undefined ? "—" : value.toFixed(digits));
+  return (
+    <tr>
+      <td>{label}</td>
+      <td>{fmt(stats.avg)}</td>
+      <td>{fmt(stats.p50)}</td>
+      <td>{fmt(stats.p95)}</td>
+      <td>{fmt(stats.min)}</td>
+      <td>{fmt(stats.max)}</td>
+    </tr>
+  );
+}
+
 /* ====== 单个聊天窗口组件 ====== */
 function ChatWindow({
   window: win,
@@ -518,6 +819,9 @@ function ChatWindow({
     // 格式化工具：保留两位小数，去掉无意义的末尾零
     const fmtTps = (tps?: number, label?: string) =>
       tps !== undefined && tps > 0 ? ` ${label} ${tps.toFixed(2)} tok/s` : "";
+    // 首字延迟：无有效值时返回空串，避免模板里出现空的括号内容
+    const fmtTtft = (ms?: number) =>
+      ms !== undefined && ms > 0 ? t("status.ttft", Math.round(ms)) : "";
     switch (win.status) {
       case "idle":
         return t("status.idle");
@@ -527,9 +831,9 @@ function ChatWindow({
         }
         return t("status.sending", contentLen);
       case "done":
-        return t("status.done", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")));
+        return t("status.done", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")), fmtTtft(win.ttft));
       case "error":
-        return t("status.error", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")));
+        return t("status.error", win.duration ?? 0, fmtTps(win.completionTps, t("status.completion_label")), fmtTps(win.promptTps, t("status.prompt_label")), fmtTtft(win.ttft));
       case "canceled":
         return t("status.canceled", win.duration ?? 0);
     }

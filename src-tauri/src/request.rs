@@ -163,6 +163,7 @@ fn emit_error(app: &tauri::AppHandle, window_id: usize, duration_ms: u128, error
         finished: true,
         error: Some(error),
         duration_ms,
+        ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
     });
@@ -182,6 +183,7 @@ fn emit_chunk(
         finished: false,
         error: None,
         duration_ms: start.elapsed().as_millis(),
+        ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
     });
@@ -201,6 +203,7 @@ fn emit_reasoning_chunk(
         finished: false,
         error: None,
         duration_ms: start.elapsed().as_millis(),
+        ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
     });
@@ -211,6 +214,7 @@ fn emit_finished(
     app: &tauri::AppHandle,
     window_id: usize,
     duration_ms: u128,
+    ttft_ms: Option<u128>,
     completion_tps: Option<f64>,
     prompt_tps: Option<f64>,
 ) {
@@ -221,6 +225,7 @@ fn emit_finished(
         finished: true,
         error: None,
         duration_ms,
+        ttft_ms,
         completion_tokens_per_second: completion_tps,
         prompt_tokens_per_second: prompt_tps,
     });
@@ -240,6 +245,7 @@ fn emit_canceled(
         // 用统一的"用户已取消"文案，便于前端展示
         error: Some(CANCELED_MESSAGE.to_string()),
         duration_ms: start.elapsed().as_millis(),
+        ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
     });
@@ -252,6 +258,7 @@ fn emit_canceled(
 fn canceled_result(
     window_id: usize,
     duration_ms: u128,
+    ttft_ms: Option<u128>,
     assistant_content: String,
     reasoning_content: String,
 ) -> SingleResult {
@@ -259,6 +266,10 @@ fn canceled_result(
         window_id,
         assistant_content,
         duration_ms,
+        ttft_ms,
+        // 取消时 usage 通常不完整，不输出 token 数，避免汇总时被低估
+        prompt_tokens: None,
+        completion_tokens: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
         error: Some(CANCELED_MESSAGE.to_string()),
@@ -355,6 +366,9 @@ pub async fn execute_stream_request(
                 assistant_content: String::new(),
                 reasoning_content: None,
                 duration_ms: start.elapsed().as_millis(),
+                ttft_ms: None,
+                prompt_tokens: None,
+                completion_tokens: None,
                 completion_tokens_per_second: None,
                 prompt_tokens_per_second: None,
                 error: Some(error_msg),
@@ -365,9 +379,11 @@ pub async fn execute_stream_request(
     // 3. 转换消息格式（前端简单结构 → LlmClient 带枚举的结构）
     let messages = convert_messages(&config.messages);
 
-    // 4. 构造模型参数
+    // 4. 构造模型参数（采样参数由前端配置，未配置时交给服务端默认值）
     let params = ChatParams {
         model: config.model.trim().to_string(),
+        max_tokens: config.max_tokens,
+        temperature: config.temperature,
         ..Default::default()
     };
 
@@ -383,6 +399,7 @@ pub async fn execute_stream_request(
             return canceled_result(
                 window_id,
                 start.elapsed().as_millis(),
+                None,
                 String::new(),
                 String::new(),
             );
@@ -400,6 +417,9 @@ pub async fn execute_stream_request(
                 assistant_content: String::new(),
                 reasoning_content: None,
                 duration_ms: start.elapsed().as_millis(),
+                ttft_ms: None,
+                prompt_tokens: None,
+                completion_tokens: None,
                 completion_tokens_per_second: None,
                 prompt_tokens_per_second: None,
                 error: Some(error_msg),
@@ -478,6 +498,12 @@ pub async fn execute_stream_request(
         prefill_at_ms,
     );
 
+    // 从 usage 提取 token 数：0 视为服务端未提供，避免汇总时被无意义地拉低
+    let usage_ref = finish_info.as_ref().and_then(|i| i.usage.as_ref());
+    let prompt_tokens = usage_ref.and_then(|u| (u.prompt_tokens > 0).then_some(u.prompt_tokens));
+    let completion_tokens =
+        usage_ref.and_then(|u| (u.completion_tokens > 0).then_some(u.completion_tokens));
+
     // 调试日志：打印 token 速度计算结果
     eprintln!(
         "[llmperf] window={window_id} total_ms={} prefill_ms={:?} completion_tps={:?} prompt_tps={:?}",
@@ -490,6 +516,7 @@ pub async fn execute_stream_request(
         return canceled_result(
             window_id,
             total_duration_ms,
+            prefill_at_ms,
             accumulated_content,
             accumulated_reasoning,
         );
@@ -505,6 +532,10 @@ pub async fn execute_stream_request(
             window_id,
             assistant_content: accumulated_content,
             duration_ms: total_duration_ms,
+            // 首字延迟仍然有效，保留下来便于定位"首字慢"类问题
+            ttft_ms: prefill_at_ms,
+            prompt_tokens,
+            completion_tokens,
             // 半截数据算出的速度没有参考价值，不入库也不展示
             completion_tokens_per_second: None,
             prompt_tokens_per_second: None,
@@ -514,13 +545,23 @@ pub async fn execute_stream_request(
     }
 
     // 10. 正常完成：发送携带 token 速度的完成事件
-    emit_finished(&app, window_id, total_duration_ms, completion_tps, prompt_tps);
+    emit_finished(
+        &app,
+        window_id,
+        total_duration_ms,
+        prefill_at_ms,
+        completion_tps,
+        prompt_tps,
+    );
 
     // 11. 返回聚合结果
     SingleResult {
         window_id,
         assistant_content: accumulated_content,
         duration_ms: total_duration_ms,
+        ttft_ms: prefill_at_ms,
+        prompt_tokens,
+        completion_tokens,
         completion_tokens_per_second: completion_tps,
         prompt_tokens_per_second: prompt_tps,
         error: None,

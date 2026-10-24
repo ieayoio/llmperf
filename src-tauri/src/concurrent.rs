@@ -19,6 +19,9 @@ pub async fn run_concurrent_requests(
     let messages = config.messages.clone();
     // 超时配置透传给每个子任务（None 时由 execute_stream_request 使用默认值）
     let timeout_secs = config.timeout_secs;
+    // 采样参数透传：压测需固定输出长度/温度，保证各轮结果可比
+    let max_tokens = config.max_tokens;
+    let temperature = config.temperature;
     // 使用 config.window_id 作为基准窗口标识
     let base_window_id = config.window_id;
 
@@ -32,6 +35,8 @@ pub async fn run_concurrent_requests(
             // 每个任务使用独立的 window_id，避免事件混淆
             window_id: base_window_id + i,
             timeout_secs,
+            max_tokens,
+            temperature,
         })
         .collect();
 
@@ -75,6 +80,9 @@ pub async fn run_concurrent_requests(
                     assistant_content: String::new(),
                     reasoning_content: None,
                     duration_ms: 0,
+                    ttft_ms: None,
+                    prompt_tokens: None,
+                    completion_tokens: None,
                     completion_tokens_per_second: None,
                     prompt_tokens_per_second: None,
                     error: Some(format!("并发任务异常退出: {e}")),
