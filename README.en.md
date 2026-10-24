@@ -19,6 +19,7 @@ A cross-platform desktop app built with [Tauri 2](https://tauri.app/) for **conc
 - **CSV export**: per-window details and sweep summaries (BOM included, opens cleanly in Excel)
 - **Controllable cancellation**: cancel a single window or everything, keeping the partial output
 - **Internationalization**: Simplified Chinese / Traditional Chinese / English / Japanese / Korean, switchable from the menu
+- **Native menu and shortcuts**: File / Run / View / Language / Window / Help groups, with items enabled or disabled according to the request and result state, and shortcuts for every common action
 - **Cross-platform**: Linux, macOS and Windows, with a built-in dark theme
 
 ## 🖼 Modes
@@ -31,6 +32,34 @@ The top bar manages Base URL, API Key, Model, Max Tokens, Temperature and the te
 | **Sweep** | Steps through a concurrency ladder serially in silent mode (no per-token events), emitting only metrics, curves and a per-step table | Find the capacity ceiling and the throughput saturation point |
 
 In chat mode, Enter sends, and each window can be canceled individually or all at once.
+
+## ⌨️ Menu and Shortcuts
+
+The app uses the native menu bar (a global menu bar on macOS, and the window-top bar on Linux / Windows):
+
+| Menu | Contents |
+|------|----------|
+| File | Export this run (CSV), export sweep (CSV), open downloads folder, quit (non-macOS) |
+| Run | Send, cancel all, clear, chat / sweep mode (radio), start sweep, stop sweep |
+| View | Zoom in, zoom out, actual size, toggle fullscreen; (dev builds only) reload interface, developer tools |
+| Language | Simplified Chinese / Traditional Chinese / English / Japanese / Korean |
+| Window | Minimize, maximize, close |
+| Help | Keyboard shortcuts, project homepage, usage docs, about (non-macOS) |
+
+| Action | Shortcut |
+|--------|----------|
+| Send | `Ctrl / Cmd + Enter` |
+| Cancel all | `Ctrl / Cmd + .` |
+| Clear (chat summary or sweep results, depending on the mode) | `Ctrl / Cmd + Shift + K` |
+| Chat mode / sweep mode | `Ctrl / Cmd + 1` / `Ctrl / Cmd + 2` |
+| Start / stop sweep | `Ctrl / Cmd + Shift + S` / `Ctrl / Cmd + Shift + X` |
+| Export run / sweep CSV | `Ctrl / Cmd + E` / `Ctrl / Cmd + Shift + E` |
+| Keyboard shortcuts | `Ctrl / Cmd + /` |
+| Zoom in / out / actual size | `Ctrl / Cmd + =` / `-` / `0` |
+| Toggle fullscreen | `F11` |
+| Reload interface / developer tools (dev builds only) | `Ctrl / Cmd + R` / `F12` |
+
+Menu items follow the UI state: while a request is in flight, Send / Start sweep are grayed out and only Cancel all / Stop sweep remain clickable; export items stay disabled until there is a result; switching modes and clearing are blocked during a sweep. The **Help → Keyboard Shortcuts** dialog is generated from the backend menu definition, so its labels follow the current language.
 
 ## 📊 Metric Definitions
 
@@ -63,6 +92,7 @@ All timings are measured client-side; only the token speeds fall back to server-
 | Streaming | [futures-util](https://crates.io/crates/futures-util) byte streams + a hand-written SSE parser |
 | Serialization | [serde](https://serde.rs/) / [serde_json](https://crates.io/crates/serde_json) |
 | Cancellation | [tokio-util](https://crates.io/crates/tokio-util) (`CancellationToken`) |
+| System integration | [tauri-plugin-opener](https://crates.io/crates/tauri-plugin-opener) (opening project links and the downloads folder) |
 | Charts | Hand-written SVG (no chart library) |
 
 ## 📦 Installation
@@ -177,24 +207,25 @@ flowchart LR
 - **Frontend** only collects configuration, renders events and aggregates statistics; all metric computation (TTFT / ITL / tok/s) happens in Rust so JS timing is never skewed by rendering.
 - **Backend** maps each `window_id` to a `tokio` task with its own cancellation token; a single `EventSink` decides whether events are pushed to the frontend.
 - **Silent mode** (`config.silent = true`) drops all events and returns results only through the command return value — this is what makes a sweep with dozens of parallel requests viable.
+- **Menu** is built and kept up to date by the backend: the frontend pushes UI state through `set_menu_state`, while menu actions that depend on UI state (send, export, mode switch) are turned into `menu-command` events for the frontend, and the rest (window, zoom, fullscreen, opening links) are handled in Rust directly.
 
 ## 📁 Project Structure
 
 ```
 src/                      # Frontend (React + TypeScript)
-├── App.tsx               # Main UI: config bar, mode switch, chat windows, summary table
+├── App.tsx               # Main UI: config bar, mode switch, chat windows, summary, menu command dispatch, shortcut dialog
 ├── SweepPanel.tsx        # Sweep panel: SVG charts + per-step table
 ├── metrics.ts            # Metric aggregation, statistics, CSV export
-└── i18n/                 # Internationalization (zh-SC / zh-TC / en)
+└── i18n/                 # Internationalization (zh-SC / zh-TC / en / ja / ko)
 
 src-tauri/src/            # Backend (Rust)
-├── lib.rs                # Tauri commands, window actions, file export
+├── lib.rs                # Tauri commands, menu action dispatch, window/zoom/fullscreen, file export
 ├── request.rs            # Single streaming request: SSE consumption, metrics, events
 ├── concurrent.rs         # N-way concurrency orchestration
 ├── cancel.rs             # Cancellation registry keyed by window_id
 ├── types.rs              # Shared data structures (SingleResult / StreamChunkEvent, ...)
 ├── llm_tool.rs           # OpenAI-compatible client and SSE parser
-└── menu.rs               # Native menu
+└── menu.rs               # Native menu: MENU_DEFS table, state linkage, in-place language update
 ```
 
 ## 🧪 Testing
@@ -218,6 +249,8 @@ cargo test --lib -- --ignored            # metric definition live tests
 ```
 
 Without the environment variables the live tests skip instead of failing, keeping CI green.
+
+Menu unit tests check that all five locales are fully translated, that menu IDs and shortcuts are unique, and that the enabled/disabled rules hold for each UI state.
 
 ## 🤖 Development Notes
 
