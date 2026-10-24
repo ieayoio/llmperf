@@ -139,7 +139,20 @@
     "reasoning": "💭 사고 중",
     "error": "오류:",
     "canceled": "⛔ 사용자가 취소했습니다",
-    "reasoningSummary": "💭 사고 과정"
+    "reasoningSummary": "💭 사고 과정",
+    "focus": "확대 보기",
+    "closeFocus": "확대 종료 (Esc)",
+    "prevWindow": "이전 윈도우 (←)",
+    "nextWindow": "다음 윈도우 (→)",
+    "focusHint": "← / → 윈도우 전환, 숫자 키로 이동, Esc 종료",
+    "jumpToBottom": "맨 아래로",
+    "summaryIdle": "대기",
+    "summaryChars": "{0}자",
+    "summaryReasoning": "사고 {0}",
+    "summaryError": "실패",
+    "summaryCanceled": "취소됨",
+    "focusSwitch": "윈도우 {0}(으)로 전환",
+    "thumbsToggle": "다른 윈도우 썸네일 표시 전환"
   },
   "about": {
     "versionLabel": "버전",

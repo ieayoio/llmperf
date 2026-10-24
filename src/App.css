@@ -9,6 +9,7 @@
 
   /* ====== 设计变量 ======
      集中定义取色与圆角，避免各处再写近似值，导致边框、底色逐渐跑偏 */
+  --bg-surface-0: #0c0c10;      /* 垫底表面：侧栏、卡片容器，比一级表面更深一层 */
   --bg-surface-1: #14141a;      /* 一级表面：面板、输入框、对话窗口 */
   --bg-surface-2: #1c1c24;      /* 二级表面：表头、指标条、次级按钮 */
   --bg-bubble: #1b1b22;         /* 助手消息气泡 */
@@ -290,6 +291,221 @@ html, body, #root {
 /* 6 个及以上：按可用宽度自适应列数（每列不小于 240px）。
    之前对 9+ 没有定义列数，会回退成单列，50 并发时变成一条竖着的长列表 */
 .chat-grid.cols-auto { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+/* ====== 窗口区域容器与聚焦浮层 ====== */
+/* 定位容器：聚焦浮层只覆盖窗口网格，上方配置栏与汇总面板仍可操作 */
+.chat-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 浮层做成半透明遮罩：既能专注读单个窗口，又隐约看得到整体进度 */
+.focus-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  padding: 0 12px 12px 12px;
+  background: rgba(9, 9, 12, 0.72);
+  animation: focus-fade-in 0.12s ease-out;
+}
+
+/* 浮层内层：纵向容器，承载主体区域 */
+.focus-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.focus-panel {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 主体区域：左侧缩略卡片 + 右侧主窗口 */
+.focus-body {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ====== 左侧缩略卡片（窗口索引 + 输出预览） ====== */
+/* 纵向列表：一个窗口一张卡片，当前窗口高亮，切换时卡片位置不漂移。
+   容器本身铺不透明底色：否则卡片间隙会透出下面网格里的文字 */
+.focus-thumbs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+  width: clamp(170px, 18vw, 240px);
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-0);
+  overflow-y: auto;
+}
+
+.focus-thumbs::-webkit-scrollbar {
+  width: 6px;
+}
+
+.focus-thumbs::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 3px;
+}
+
+.focus-thumbs::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.focus-thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+  /* 固定高度：切换窗口时卡片位置不跳动，头部 + 三行预览正好一屏 */
+  height: 82px;
+  padding: 7px 9px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-surface-1);
+  color: var(--text-muted);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.focus-thumb:not(.is-active):hover {
+  background: var(--bg-surface-2);
+  border-color: var(--text-muted);
+}
+
+/* 当前主视图对应的卡片：主色描边，且不再响应 hover/点击。
+   底色必须写不透明值：半透明紫会让下方网格内容透出来 */
+.focus-thumb.is-active {
+  border-color: var(--accent);
+  background: #2a2145;
+  cursor: default;
+}
+
+/* 状态色只落在描边上：几十张卡片时满屏彩色描边会盖过内容本身 */
+.focus-thumb.status-sending { border-color: rgba(245, 158, 11, 0.4); }
+.focus-thumb.status-done { border-color: rgba(34, 197, 94, 0.3); }
+.focus-thumb.status-error { border-color: rgba(239, 68, 68, 0.45); }
+
+.focus-thumb-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 状态圆点：与状态条、窗口头部保持同一套颜色语义 */
+.focus-thumb-head::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.focus-thumb.status-sending .focus-thumb-head::before { background: var(--status-sending); }
+.focus-thumb.status-done .focus-thumb-head::before { background: var(--status-done); }
+.focus-thumb.status-error .focus-thumb-head::before { background: var(--status-error); }
+.focus-thumb.status-canceled .focus-thumb-head::before { background: var(--status-canceled); }
+
+.focus-thumb-id {
+  font-weight: 600;
+  color: var(--accent-soft);
+}
+
+.focus-thumb.status-error .focus-thumb-id {
+  color: var(--status-error);
+}
+
+/* 预览只给三行：缩略卡片用来看“输出走向”，细节回主窗口 */
+.focus-thumb-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes focus-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 聚焦后的窗口铺满浮层：解除网格里的小窗高度限制 */
+.chat-window.is-focused {
+  flex: 1;
+  min-height: 0;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+/* 标题可点击放大，用虚下划线暗示可交互，不抢占状态色 */
+.chat-window-title.clickable {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.chat-window-title.clickable:hover {
+  color: var(--text);
+  text-decoration: underline dotted;
+}
+
+/* 头部右侧的放大 / 切换按钮：与取消按钮同高，但走中性色不抢眼 */
+.btn-focus-window,
+.btn-focus-nav {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-focus-window:hover,
+.btn-focus-nav:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 缩略卡片开关处于打开状态 */
+.btn-focus-nav.is-active {
+  border-color: var(--accent);
+  color: var(--accent-soft);
+  background: rgba(124, 58, 237, 0.16);
+}
+
+/* 只有一个窗口时没有可切换的对象 */
+.btn-focus-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 
 /* ====== 单个聊天窗口 ====== */
 .chat-window {
@@ -607,6 +823,27 @@ html, body, #root {
   padding: 8px 12px;
   border-radius: var(--radius-md);
   font-size: 12px;
+}
+
+/* 手动上滚后悬在消息区底部中央，点击回到最新输出 */
+.chat-jump-bottom {
+  position: sticky;
+  bottom: 0;
+  align-self: center;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface-2);
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s;
+}
+
+.chat-jump-bottom:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
 }
 
 /* ====== 滚动条 ====== */

@@ -139,7 +139,20 @@
     "reasoning": "💭 思考过程",
     "error": "错误:",
     "canceled": "⛔ 用户已取消",
-    "reasoningSummary": "💭 思考过程"
+    "reasoningSummary": "💭 思考过程",
+    "focus": "放大查看",
+    "closeFocus": "退出放大 (Esc)",
+    "prevWindow": "上一个窗口 (←)",
+    "nextWindow": "下一个窗口 (→)",
+    "focusHint": "← / → 切换窗口，数字键 1-9 直达，Esc 退出",
+    "jumpToBottom": "回到底部",
+    "summaryIdle": "空闲",
+    "summaryChars": "{0} 字",
+    "summaryReasoning": "思考 {0} 字",
+    "summaryError": "失败",
+    "summaryCanceled": "已取消",
+    "focusSwitch": "切换到窗口 {0}",
+    "thumbsToggle": "显示/隐藏其他窗口缩略卡片"
   },
   "about": {
     "versionLabel": "版本",

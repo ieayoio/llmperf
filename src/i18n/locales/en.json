@@ -139,7 +139,20 @@
     "reasoning": "💭 Thinking",
     "error": "Error:",
     "canceled": "⛔ Canceled by user",
-    "reasoningSummary": "💭 Thinking Process"
+    "reasoningSummary": "💭 Thinking Process",
+    "focus": "Expand",
+    "closeFocus": "Exit expand (Esc)",
+    "prevWindow": "Previous window (←)",
+    "nextWindow": "Next window (→)",
+    "focusHint": "← / → to switch windows, 1-9 to jump, Esc to exit",
+    "jumpToBottom": "Back to bottom",
+    "summaryIdle": "Idle",
+    "summaryChars": "{0} chars",
+    "summaryReasoning": "thinking {0}",
+    "summaryError": "Failed",
+    "summaryCanceled": "Canceled",
+    "focusSwitch": "Switch to window {0}",
+    "thumbsToggle": "Show/hide thumbnails of other windows"
   },
   "about": {
     "versionLabel": "Version",

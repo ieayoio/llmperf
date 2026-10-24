@@ -202,6 +202,22 @@ function App() {
     }))
   );
 
+  /**
+   * 聚焦放大的窗口 id
+   *
+   * null 表示正常网格；非 null 时该窗口以浮层铺满窗口区域，
+   * 高并发下网格里的小窗只够看状态，细节需要放大后再读。
+   */
+  const [focusedId, setFocusedId] = useState<number | null>(null);
+
+  /**
+   * 聚焦视图右侧是否展示缩略卡片
+   *
+   * 默认打开：高并发下“看不到其他窗口在输出什么”是主要痛点；
+   * 窗体较窄时可手动关掉，把宽度还给主窗口。
+   */
+  const [showThumbs, setShowThumbs] = useState(true);
+
   // 用 ref 始终持有最新的窗口状态，避免 handleSend 中的闭包过时问题
   const windowsRef = useRef<ChatWindow[]>(windows);
   windowsRef.current = windows;
@@ -373,6 +389,58 @@ function App() {
       return [...prev, ...added];
     });
   }, [concurrency]);
+
+  // 窗口被裁掉（并发数调小）或切走模式时，关闭聚焦浮层，避免指向已不存在的窗口
+  useEffect(() => {
+    if (focusedId === null) return;
+    if (mode !== "chat" || focusedId >= windows.length) setFocusedId(null);
+  }, [focusedId, mode, windows.length]);
+
+  /** 环形切换聚焦窗口：高并发时比逐个点更顺手，也不会越界 */
+  const focusStep = (step: number) => {
+    setFocusedId((prev) => {
+      const count = windowsRef.current.length;
+      if (prev === null || count === 0) return null;
+      return (prev + step + count) % count;
+    });
+  };
+
+  // 聚焦模式下的键盘导航：←/→ 切换窗口、数字键直达、Esc 退出
+  useEffect(() => {
+    if (focusedId === null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      // 在输入框里打字时不劫持按键（Esc 除外），否则数字键会切走窗口
+      const target = e.target as HTMLElement | null;
+      const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+      if (typing && e.key !== "Escape") return;
+
+      if (e.key === "Escape") {
+        setFocusedId(null);
+        return;
+      }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        focusStep(e.key === "ArrowLeft" ? -1 : 1);
+        return;
+      }
+      if (/^[1-9]$/.test(e.key)) {
+        const idx = Number(e.key) - 1;
+        if (idx < windowsRef.current.length) setFocusedId(idx);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focusedId]);
+
+  // 当前聚焦的窗口（并发数刚调小时可能短暂找不到，此时浮层不渲染）
+  const focusedWindow =
+    focusedId === null ? undefined : windows.find((w) => w.id === focusedId);
+
+  // 缩略列表里当前项的引用：键盘切换时把它滚进可视区（50 并发时列表远超一屏）
+  const activeThumbRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    activeThumbRef.current?.scrollIntoView({ block: "nearest" });
+  }, [focusedId]);
 
   const handleSend = async () => {
     // 防重复提交：上一轮流式尚未结束时（按钮/回车都可能触发）直接忽略。
@@ -961,16 +1029,58 @@ function App() {
         )}
 
       {/* ====== 底部聊天窗口区域（仅对话模式） ====== */}
-      {/* 1-5 个用固定列数保持紧凑；6 个以上改由 CSS 按可用宽度自适应列数 */}
+      {/* 定位容器：聚焦浮层只覆盖窗口网格，上方的配置栏与汇总面板仍然可用 */}
       {mode === "chat" && (
-        <div className={`chat-grid ${concurrency <= 5 ? `cols-${concurrency}` : "cols-auto"}`}>
-          {windows.map((win) => (
-            <ChatWindow
-              key={win.id}
-              window={win}
-              onCancel={() => cancelWindow(win.id)}
-            />
-          ))}
+        <div className="chat-area">
+          {/* 1-5 个用固定列数保持紧凑；6 个以上改由 CSS 按可用宽度自适应列数 */}
+          <div className={`chat-grid ${concurrency <= 5 ? `cols-${concurrency}` : "cols-auto"}`}>
+            {windows.map((win) => (
+              <ChatWindow
+                key={win.id}
+                window={win}
+                onCancel={() => cancelWindow(win.id)}
+                onFocus={() => setFocusedId(win.id)}
+              />
+            ))}
+          </div>
+
+          {/* 聚焦浮层：点击遮罩或 Esc 退出，←/→ 切换窗口 */}
+          {focusedWindow && (
+            <div className="focus-overlay" onClick={() => setFocusedId(null)}>
+              <div className="focus-shell" onClick={(e) => e.stopPropagation()}>
+                <div className="focus-body">
+                  {/* 左侧缩略卡片：既是窗口索引，也能看到其他窗口的实时输出尾巴 */}
+                  {showThumbs && windows.length > 1 && (
+                    <div className="focus-thumbs">
+                      {windows.map((win) => (
+                        <FocusThumb
+                          key={win.id}
+                          window={win}
+                          active={win.id === focusedId}
+                          activeRef={activeThumbRef}
+                          onSelect={() => setFocusedId(win.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="focus-panel">
+                    <ChatWindow
+                      window={focusedWindow}
+                      onCancel={() => cancelWindow(focusedWindow.id)}
+                      focused
+                      onPrev={() => focusStep(-1)}
+                      onNext={() => focusStep(1)}
+                      onClose={() => setFocusedId(null)}
+                      thumbsVisible={showThumbs}
+                      thumbsAvailable={windows.length > 1}
+                      onToggleThumbs={() => setShowThumbs((v) => !v)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1122,15 +1232,157 @@ function ChatMetric({
   );
 }
 
+/* ====== 缩略卡片上的窗口摘要：把单个窗口压成一行文字 ====== */
+function windowSummary(win: ChatWindow): string {
+  // 字符数紧凑显示：卡片头部宽度有限，上千后只保留一位小数
+  const compact = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`);
+  switch (win.status) {
+    case "idle":
+      return t("chat.summaryIdle");
+    case "sending":
+      // 推理模型先出思考内容，此时正文还是 0 字符，显示思考长度更有信息量
+      if (win.accumulatedContent.length > 0) {
+        return t("chat.summaryChars", compact(win.accumulatedContent.length));
+      }
+      if (win.accumulatedReasoning.length > 0) {
+        return t("chat.summaryReasoning", compact(win.accumulatedReasoning.length));
+      }
+      return "…";
+    case "done": {
+      const ms = Math.round(win.duration ?? 0);
+      return win.completionTps !== undefined && win.completionTps > 0
+        ? `${ms}ms · ${win.completionTps.toFixed(1)}`
+        : `${ms}ms`;
+    }
+    case "error":
+      return t("chat.summaryError");
+    case "canceled":
+      return t("chat.summaryCanceled");
+  }
+}
+
+/* ====== 缩略卡片的内容预览 ====== */
+/** 取某个角色最后一条有内容的文本：缩略卡片只需要“最新一段输出” */
+function lastTextByRole(win: ChatWindow, role: "assistant" | "user"): string {
+  for (let i = win.messages.length - 1; i >= 0; i--) {
+    const msg = win.messages[i];
+    if (msg.role === role && msg.content.trim()) return msg.content;
+  }
+  return "";
+}
+
+function previewText(win: ChatWindow): string {
+  // 发送中优先看还没落库的流式缓冲（正文优先，推理模型可能只有思考），
+  // 结束后看最后一条助手消息，再退回到本轮提问
+  const streaming = win.accumulatedContent || win.accumulatedReasoning;
+  const text = streaming || lastTextByRole(win, "assistant") || lastTextByRole(win, "user");
+  const trimmed = text.trim();
+  // 只保留尾部：开头往往是各窗口相同的 prompt，看不出差异
+  return trimmed.length > 240 ? `…${trimmed.slice(-240)}` : trimmed;
+}
+
+/* ====== 聚焦视图左侧的缩略卡片 ====== */
+function FocusThumb({
+  window: win,
+  active,
+  activeRef,
+  onSelect,
+}: {
+  window: ChatWindow;
+  /** 是否为当前主视图窗口：高亮显示，且不再响应点击 */
+  active: boolean;
+  /** 键盘切换时用来把当前项滚进可视区 */
+  activeRef?: { current: HTMLButtonElement | null };
+  onSelect: () => void;
+}) {
+  const preview = previewText(win);
+  return (
+    <button
+      ref={active ? activeRef : undefined}
+      className={`focus-thumb status-${win.status}${active ? " is-active" : ""}`}
+      onClick={active ? undefined : onSelect}
+      title={active ? undefined : t("chat.focusSwitch", win.id + 1)}
+      aria-current={active || undefined}
+    >
+      <span className="focus-thumb-head">
+        <span className="focus-thumb-id">#{win.id + 1}</span>
+        <span className="focus-thumb-meta">{windowSummary(win)}</span>
+      </span>
+      {preview && <span className="focus-thumb-text">{preview}</span>}
+    </button>
+  );
+}
+
 /* ====== 单个聊天窗口组件 ====== */
 function ChatWindow({
   window: win,
   onCancel,
+  onFocus,
+  focused = false,
+  onPrev,
+  onNext,
+  onClose,
+  thumbsVisible,
+  thumbsAvailable,
+  onToggleThumbs,
 }: {
   window: ChatWindow;
   /** 用户点击"取消"按钮时触发，参数语义对应后端 window_id */
   onCancel: () => void;
+  /** 点击头部放大查看；仅在网格中提供，聚焦浮层里不传 */
+  onFocus?: () => void;
+  /** 是否处于聚焦浮层中（控制切换/关闭按钮与铺满样式） */
+  focused?: boolean;
+  onPrev?: () => void;
+  onNext?: () => void;
+  onClose?: () => void;
+  /** 缩略卡片当前是否展示（仅聚焦态使用） */
+  thumbsVisible?: boolean;
+  /** 是否可以切换缩略卡片：只有一个窗口时没有切换意义 */
+  thumbsAvailable?: boolean;
+  onToggleThumbs?: () => void;
 }) {
+  // 消息区滚动容器：流式输出时自动跟随到底部
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 是否跟随最新内容
+   *
+   * 用 ref 保存而不是 state：scroll 事件高频触发，用 state 会让每次滚动都重渲染；
+   * 只有"是否已脱离底部"这种需要驱动按钮显隐的结果才同步进 state。
+   */
+  const followRef = useRef(true);
+  const [detached, setDetached] = useState(false);
+
+  const scrollToBottom = (smooth = false) => {
+    const el = messagesRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  };
+
+  // 用户上滚后暂停跟随，手动滚回底部附近时自动恢复
+  const handleScroll = () => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nextFollow = distance < 24;
+    if (nextFollow === followRef.current) return;
+    followRef.current = nextFollow;
+    setDetached(!nextFollow);
+  };
+
+  // 开始新一轮发送时恢复跟随：按了发送就是想看新输出
+  useEffect(() => {
+    if (win.status !== "sending") return;
+    followRef.current = true;
+    setDetached(false);
+  }, [win.status]);
+
+  // 内容增长时跟随到底部（用户主动上滚查看历史时保持原位）
+  useEffect(() => {
+    if (!followRef.current) return;
+    scrollToBottom();
+  }, [win.messages.length, win.accumulatedContent, win.accumulatedReasoning, win.status]);
+
   const statusLabel = () => {
     const contentLen = win.accumulatedContent.length;
     const reasoningLen = win.accumulatedReasoning.length;
@@ -1167,9 +1419,16 @@ function ChatWindow({
   };
 
   return (
-    <div className={`chat-window status-${win.status}`}>
+    <div className={`chat-window status-${win.status}${focused ? " is-focused" : ""}`}>
       <div className="chat-header">
-        <span className="chat-window-title">{t("chat.window", win.id + 1)}</span>
+        {/* 标题可点击放大：高并发时网格里的小窗只够看状态，细节需要聚焦后阅读 */}
+        <span
+          className={`chat-window-title${onFocus ? " clickable" : ""}`}
+          onClick={onFocus}
+          title={onFocus ? t("chat.focus") : focused ? t("chat.focusHint") : undefined}
+        >
+          {t("chat.window", win.id + 1)}
+        </span>
         <div className="chat-header-right">
           <span className="chat-status">{statusLabel()}</span>
           {/* 仅在 sending 时显示单窗口"取消"按钮，避免误触 */}
@@ -1181,6 +1440,35 @@ function ChatWindow({
             >
               {t("config.cancel")}
             </button>
+          )}
+          {/* 聚焦浮层里换成"上一个 / 下一个 / 缩略卡片 / 退出"，否则只给一个放大按钮 */}
+          {focused ? (
+            <>
+              <button className="btn-focus-nav" onClick={onPrev} title={t("chat.prevWindow")}>
+                ‹
+              </button>
+              <button className="btn-focus-nav" onClick={onNext} title={t("chat.nextWindow")}>
+                ›
+              </button>
+              <button
+                className={`btn-focus-nav${thumbsVisible ? " is-active" : ""}`}
+                onClick={onToggleThumbs}
+                title={t("chat.thumbsToggle")}
+                aria-pressed={thumbsVisible}
+                disabled={!thumbsAvailable}
+              >
+                ▤
+              </button>
+              <button className="btn-focus-nav" onClick={onClose} title={t("chat.closeFocus")}>
+                ✕
+              </button>
+            </>
+          ) : (
+            onFocus && (
+              <button className="btn-focus-window" onClick={onFocus} title={t("chat.focus")}>
+                ⛶
+              </button>
+            )
           )}
         </div>
       </div>
@@ -1196,7 +1484,7 @@ function ChatWindow({
         </div>
       )}
 
-      <div className="chat-messages">
+      <div className="chat-messages" ref={messagesRef} onScroll={handleScroll}>
         {win.messages.length === 0 && win.accumulatedContent.length === 0 && win.status === "idle" && (
           <div className="chat-empty">{t("chat.empty")}</div>
         )}
@@ -1259,6 +1547,19 @@ function ChatWindow({
           <div className="chat-canceled">
             <strong>{t("chat.canceled")}</strong>
           </div>
+        )}
+        {/* 手动上滚后悬在底部：避免流式内容被"锁"在看过的位置 */}
+        {detached && (
+          <button
+            className="chat-jump-bottom"
+            onClick={() => {
+              followRef.current = true;
+              setDetached(false);
+              scrollToBottom(true);
+            }}
+          >
+            ↓ {t("chat.jumpToBottom")}
+          </button>
         )}
       </div>
     </div>

@@ -176,6 +176,8 @@ Leaving Max Tokens / Temperature empty means "use the server default"; **fix Max
 
 Every window accumulates its own multi-turn history for display; the context sent to the model is based on window 0, so all windows always send the same prompt.
 
+Windows get small at high concurrency: click a window title (or the ⛶ button) to expand it. Use `←` / `→` to switch windows, `1`~`9` to jump directly, and `Esc` to exit. An expanded view shows a thumbnail column on the left (window index + status dot + char count / duration·tok/s + latest output snippet); the active window is highlighted, and clicking another card switches to it. Use the ▤ button to hide the column on narrow windows. The message area follows the latest output automatically; scrolling up pauses it, and "Back to bottom" resumes.
+
 ### Concurrency Sweep
 
 1. Switch to **Sweep** in the top-right corner

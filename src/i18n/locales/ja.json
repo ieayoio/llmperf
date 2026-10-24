@@ -139,7 +139,20 @@
     "reasoning": "💭 思考中",
     "error": "エラー:",
     "canceled": "⛔ ユーザーがキャンセルしました",
-    "reasoningSummary": "💭 思考プロセス"
+    "reasoningSummary": "💭 思考プロセス",
+    "focus": "拡大表示",
+    "closeFocus": "拡大を終了 (Esc)",
+    "prevWindow": "前のウィンドウ (←)",
+    "nextWindow": "次のウィンドウ (→)",
+    "focusHint": "← / → で切替、数字キーで移動、Esc で終了",
+    "jumpToBottom": "最新位置へ",
+    "summaryIdle": "待機",
+    "summaryChars": "{0} 文字",
+    "summaryReasoning": "思考 {0}",
+    "summaryError": "失敗",
+    "summaryCanceled": "キャンセル済み",
+    "focusSwitch": "ウィンドウ {0} に切り替え",
+    "thumbsToggle": "他のウィンドウのサムネイル表示切替"
   },
   "about": {
     "versionLabel": "バージョン",
