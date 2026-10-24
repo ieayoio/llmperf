@@ -22,8 +22,7 @@ fn set_initial_language(
     app: tauri::AppHandle,
     lang: String,
 ) {
-    // 菜单文本与勾选状态由 rebuild_menu 重建时一并确定，这里无需单独维护菜单项
-    rebuild_menu(&app, &lang);
+    apply_menu_language(&app, &lang);
 
     // 通知所有前端窗口菜单已同步
     for window in app.webview_windows().values() {
@@ -98,26 +97,13 @@ fn save_text_file(
     Ok(path.display().to_string())
 }
 
-/// 重建菜单栏：移除旧菜单并创建新菜单
+/// 就地更新原生菜单的语言
 ///
-/// 在 Linux/GTK 上，直接修改菜单项文本不一定能触发 UI 刷新，
-/// 因此采用重建整个菜单的方式来确保文本正确更新。
-fn rebuild_menu<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
-    // 移除旧菜单（会同时移除所有窗口上的旧菜单）
-    let _ = app.remove_menu();
-
-    // 创建新菜单，create_menu 会根据 lang 参数正确设置菜单文本与勾选状态
-    match menu::create_menu(app, lang) {
-        Ok(new_menu) => {
-            // 应用新菜单（旧菜单及其菜单项会被释放）
-            if let Err(e) = app.set_menu(new_menu) {
-                eprintln!("[menu] 设置新菜单失败: {}", e);
-            }
-        }
-        Err(e) => {
-            eprintln!("[menu] 创建新菜单失败: {}", e);
-        }
-    }
+/// 不重建菜单：`AppHandle::set_menu()` 内部会先 `remove_menu()`，再异步挂载新菜单，
+/// 中间会有一帧菜单栏不存在，webview 被迫拉伸到整个窗口高度再回缩，
+/// 表现为切换语言时界面抖动。菜单项本身支持就地改文本，因此只需更新文本。
+fn apply_menu_language<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
+    app.state::<menu::MenuHandle<R>>().apply_language(lang);
 }
 
 /// 对所有 webview 窗口执行同一操作
@@ -130,9 +116,9 @@ where
     }
 }
 
-/// 切换应用语言：重建菜单并通知所有前端窗口
+/// 切换应用语言：更新菜单文本并通知所有前端窗口
 fn switch_lang<R: Runtime>(app: &tauri::AppHandle<R>, lang: &str) {
-    rebuild_menu(app, lang);
+    apply_menu_language(app, lang);
     for_each_window(app, |w| {
         let _ = w.emit("language-changed", lang);
     });
@@ -189,9 +175,12 @@ pub fn run() {
         ])
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
-            // 创建菜单（初始语言默认简体中文，随后由 set_initial_language 按用户设置重建）
-            let menu = menu::create_menu(app.handle(), "zh-SC")?;
+            // 创建菜单（初始语言默认简体中文，随后由 set_initial_language 按用户设置就地更新）
+            let (menu, menu_handle) = menu::create_menu(app.handle(), "zh-SC")?;
             app.set_menu(menu)?;
+
+            // 菜单句柄只注册一次：切换语言时就地改文本，不重建菜单
+            app.manage(menu_handle);
 
             // 注册菜单事件处理器：处理语言切换 + 窗口操作
             app.on_menu_event(move |app, event| {
