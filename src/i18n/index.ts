@@ -24,16 +24,16 @@
 import zhSC from "./locales/zh-SC.json";
 import zhTC from "./locales/zh-TC.json";
 import en from "./locales/en.json";
+import ja from "./locales/ja.json";
+import ko from "./locales/ko.json";
 
 /** 支持的语言列表 - 非程序员只需在这里添加新语言即可 */
 export const SUPPORTED_LANGUAGES: Record<string, { code: string; name: string }> = {
   "zh-SC": { code: "zh-SC", name: "简体中文" },
   "zh-TC": { code: "zh-TC", name: "繁體中文" },
   en: { code: "en", name: "English" },
-  // 添加新语言示例:
-  // ja: { code: "ja", name: "日本語" },
-  // ko: { code: "ko", name: "한국어" },
-  // fr: { code: "fr", name: "Français" },
+  ja: { code: "ja", name: "日本語" },
+  ko: { code: "ko", name: "한국어" },
 };
 
 /** 语言包字典 */
@@ -41,6 +41,8 @@ const localeFiles: Record<string, Record<string, unknown>> = {
   "zh-SC": zhSC,
   "zh-TC": zhTC,
   en,
+  ja,
+  ko,
 };
 
 /** 当前语言代码，默认为简体中文 */

@@ -18,7 +18,7 @@ A cross-platform desktop app built with [Tauri 2](https://tauri.app/) for **conc
 - **Per-run summary**: mean, P50, P95, min/max across windows plus overall throughput
 - **CSV export**: per-window details and sweep summaries (BOM included, opens cleanly in Excel)
 - **Controllable cancellation**: cancel a single window or everything, keeping the partial output
-- **Internationalization**: Simplified Chinese / Traditional Chinese / English, switchable from the menu
+- **Internationalization**: Simplified Chinese / Traditional Chinese / English / Japanese / Korean, switchable from the menu
 - **Cross-platform**: Linux, macOS and Windows, with a built-in dark theme
 
 ## 🖼 Modes

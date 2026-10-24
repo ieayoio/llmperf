@@ -1,224 +1,141 @@
 # 添加新语言指南
 
-本文档指导你如何为 LLM 并发测试工具添加新的语言版本。
+本文档说明如何为 LLM 并发测试工具新增一种界面语言。当前已支持：简体中文（`zh-SC`）、繁体中文（`zh-TC`）、English（`en`）、日本語（`ja`）、한국어（`ko`）。
 
 ## 工作原理
 
-1. **Tauri 原生菜单**：在 Rust 后端 (`src-tauri/src/menu.rs`) 定义原生菜单栏
-2. **语言包文件**：在 `src/i18n/locales/` 下存放各语言的 JSON 翻译文件
-3. **前端监听**：前端通过 Tauri 事件系统监听语言切换，更新界面
+翻译文本只有一份来源：`src/i18n/locales/*.json`。
 
-## 快速开始（3 步搞定）
+| 位置 | 作用 |
+|------|------|
+| `src/i18n/locales/*.json` | 唯一的翻译来源，前端界面与 Rust 原生菜单都从这里取文本 |
+| `src/i18n/index.ts` | 前端加载语言包、`t()` 翻译函数、持久化到 `localStorage` |
+| `src-tauri/src/menu.rs` | 编译期用 `include_str!` 嵌入同一批 JSON，动态生成本地菜单 |
 
-### 第 1 步：复制中文语言包
+因为菜单项是**按 `LANGS` 数组动态生成**的，新增语言不需要逐个手写菜单项。
 
-复制 `zh.json` 文件，用新语言代码命名：
+## 三步添加语言
+
+### 第 1 步：新增语言包
+
+复制 `zh-SC.json`（键最全）并按语言代码命名：
 
 ```bash
-cp src/i18n/locales/zh.json src/i18n/locales/ja.json
+cp src/i18n/locales/zh-SC.json src/i18n/locales/xx.json
 ```
 
-### 第 2 步：翻译内容
+翻译规则：
 
-用你熟悉的语言替换所有 `value` 的值。
+- ❌ 不要改动 `key`（如 `config.send`、`summary.tpot`）
+- ❌ 不要改动 `{0}`、`{1}` 等占位符，也不要删除
+- ✅ 只替换引号内的文本
 
-**重要规则：**
-- ❌ 不要修改 `key`（如 `app.title`、`config.send` 等）
-- ❌ 不要修改 `{0}`、`{1}` 等数字占位符
-- ✅ 只修改引号内的文本内容
-
-**示例：**
-```json
-// 原始（中文）
-"app": {
-  "title": "⚡ LLM 并发测试工具"
-}
-
-// 修改后（日语）
-"app": {
-  "title": "⚡ LLM 並行テストツール"
-}
-```
-
-**关于占位符 `{0}`、`{1}`：**
-如果翻译后的文本中需要嵌入动态数字，保留占位符即可。
-例如 `"窗口 {0}"` → 日语 `"ウィンドウ {0}"`
-
-### 第 3 步：注册语言
-
-#### 3.1 修改 `src/i18n/index.ts`
-
-打开 `src/i18n/index.ts` 文件，找到 `SUPPORTED_LANGUAGES` 部分：
-
-```typescript
-export const SUPPORTED_LANGUAGES: Record<string, { code: string; name: string }> = {
-  zh: { code: "zh", name: "中文" },
-  en: { code: "en", name: "English" },
-  // ← 在这里添加你的新语言
-  // ja: { code: "ja", name: "日本語" },
-};
-```
-
-取消注释并修改为你的语言，例如添加日语：
-
-```typescript
-ja: { code: "ja", name: "日本語" },
-```
-
-然后在 `import` 部分添加语言包导入：
-
-```typescript
-import zh from "./locales/zh.json";
-import en from "./locales/en.json";
-import ja from "./locales/ja.json";  // ← 添加这行
-```
-
-最后，将语言包加入 `localeFiles` 字典：
-
-```typescript
-const localeFiles: Record<string, Record<string, unknown>> = {
-  zh, en, ja,  // ← 添加 ja
-};
-```
-
-#### 3.2 修改 `src-tauri/src/menu.rs`
-
-在 `语言` 子菜单中添加新的菜单项：
-
-```rust
-// 在语言菜单部分添加新语言项
-let lang_zh = MenuItem::with_id(app, "lang-zh".to_string(), "中文", true, None::<String>)?;
-let lang_en = MenuItem::with_id(app, "lang-en".to_string(), "English", true, None::<String>)?;
-let lang_ja = MenuItem::with_id(app, "lang-ja".to_string(), "日本語", true, None::<String>)?;  // ← 添加
-
-let language_menu = Submenu::with_items(app, "语言", true, &[&lang_zh, &lang_en, &lang_ja])?;  // ← 添加 &lang_ja
-```
-
-#### 3.3 修改 `src-tauri/src/lib.rs`
-
-在菜单事件处理器中添加新语言的判断：
-
-```rust
-app.on_menu_event(|app, event| {
-    let id = event.id();
-    if *id == "lang-zh" {
-        let _ = app.emit_str("language-changed", "zh".to_string());
-    } else if *id == "lang-en" {
-        let _ = app.emit_str("language-changed", "en".to_string());
-    } else if *id == "lang-ja" {
-        let _ = app.emit_str("language-changed", "ja".to_string());  // ← 添加
-    }
-});
-```
-
-## 完整示例：添加日语 (ja)
-
-### 1. 创建 `src/i18n/locales/ja.json`
+**必须在所有语言包里补齐新语言在 `language` 区块下的显示名**，否则该语言的菜单项会退化成语言代码：
 
 ```json
-{
-  "app": {
-    "title": "⚡ LLM 並行テストツール"
-  },
-  "config": {
-    "baseURL": "Base URL",
-    "baseURLPlaceholder": "http://127.0.0.1:16777/v1",
-    "apiKey": "API Key",
-    "apiKeyPlaceholder": "sk-...",
-    "model": "Model",
-    "modelPlaceholder": "gpt-3.5-turbo",
-    "concurrency": "並行数",
-    "sendMessage": "メッセージ",
-    "messagePlaceholder": "テストメッセージを入力 (Enter で送信)",
-    "send": "🚀 送信",
-    "clear": "🗑 クリア"
-  },
-  "status": {
-    "idle": "⏸ 待機中",
-    "sending": "⏳ 送信中... (本文 {0} 文字)",
-    "sending_with_reasoning": "⏳ 送信中... (本文 {0} 文字, 思考 {1} 文字)",
-    "done": "✅ 完了 ({0}ms)",
-    "error": "❌ {0}ms",
-    "content": "本文",
-    "reasoning": "思考"
-  },
-  "chat": {
-    "window": "ウィンドウ {0}",
-    "empty": "送信待ち...",
-    "user": "👤 あなた",
-    "assistant": "🤖 ボット",
-    "reasoning": "💭 思考中",
-    "error": "エラー:",
-    "reasoningSummary": "💭 思考プロセス"
-  },
-  "language": {
-    "label": "言語",
-    "zh": "中文",
-    "en": "English",
-    "menu": "言語"
-  }
+"language": {
+  "label": "语言",
+  "zh-SC": "简体中文",
+  "zh-TC": "繁體中文",
+  "en": "English",
+  "ja": "日本語",
+  "ko": "한국어",
+  "xx": "Your Language"
 }
 ```
 
-### 2. 修改 `src/i18n/index.ts`
+语言名统一用该语言自己的写法（日本語、한국어），不随界面语言变化。
+
+### 第 2 步：前端注册
+
+`src/i18n/index.ts`：
 
 ```typescript
-import ja from "./locales/ja.json";  // 添加导入
+import xx from "./locales/xx.json";
 
 export const SUPPORTED_LANGUAGES = {
-  zh: { code: "zh", name: "中文" },
-  en: { code: "en", name: "English" },
-  ja: { code: "ja", name: "日本語" },  // 添加注册
+  // ...
+  xx: { code: "xx", name: "Your Language" },
 };
 
-const localeFiles = {
-  zh, en, ja,  // 添加 ja
+const localeFiles: Record<string, Record<string, unknown>> = {
+  // ...
+  xx,
 };
 ```
 
-### 3. 修改 `src-tauri/src/menu.rs`
+### 第 3 步：后端登记
+
+`src-tauri/src/menu.rs` 只需两处改动：
 
 ```rust
-let lang_ja = MenuItem::with_id(app, "lang-ja".to_string(), "日本語", true, None::<String>)?;
-let language_menu = Submenu::with_items(app, "言語", true, &[&lang_zh, &lang_en, &lang_ja])?;
-```
+// 1) 语言列表（数组长度要跟着改），顺序即菜单顺序
+pub const LANGS: [&str; 6] = ["zh-SC", "zh-TC", "en", "ja", "ko", "xx"];
 
-### 4. 修改 `src-tauri/src/lib.rs`
-
-```rust
-} else if *id == "lang-ja" {
-    let _ = app.emit_str("language-changed", "ja".to_string());
+// 2) 语言代码 → 语言包
+fn locale_json(lang: &str) -> &'static str {
+    match lang {
+        // ...
+        "xx" => include_str!("../../src/i18n/locales/xx.json"),
+        _ => include_str!("../../src/i18n/locales/en.json"),
+    }
 }
 ```
+
+菜单项 ID 约定为 `lang-<语言代码>`。`src-tauri/src/lib.rs` 的菜单事件分发需要补一行：
+
+```rust
+"lang-xx" => switch_lang(app, "xx"),
+```
+
+至此完成。勾选状态、菜单文本重建、前端切换都由现有逻辑自动处理。
+
+## 校验
+
+新增语言后建议跑一遍键集合比对，确保没有漏翻（漏掉的键会回退到简体中文）：
+
+```bash
+node -e '
+const fs=require("fs");
+const langs=["zh-SC","zh-TC","en","ja","ko","xx"];
+const flat=(o,p="")=>Object.entries(o).flatMap(([k,v])=>typeof v==="object"&&v!==null?flat(v,p+k+"."):[p+k]);
+const base=new Set(flat(JSON.parse(fs.readFileSync("src/i18n/locales/zh-SC.json","utf8"))));
+for(const l of langs){
+  const keys=new Set(flat(JSON.parse(fs.readFileSync(`src/i18n/locales/${l}.json`,"utf8"))));
+  const missing=[...base].filter(k=>!keys.has(k));
+  console.log(l, "missing:", missing.length ? missing : "none");
+}'
+```
+
+再执行 `npx tsc --noEmit` 与 `cd src-tauri && cargo check` 确认编译通过。
 
 ## 常见问题
 
-**Q: 翻译后界面没有变化？**
-A: 检查是否在所有 3 个步骤中都添加了新语言。
+**Q: 切换后界面没变化？**
+A: 三步都要做完。可以先看 `localStorage["llmperf-language"]` 是否变成了新代码。
 
-**Q: 占位符 {0} 没有显示数字？**
-A: 占位符必须保留，不要翻译或移除。
+**Q: 菜单里没有新语言？**
+A: 检查 `LANGS` 数组长度是否同步改了（长度写死会编译报错），以及 `locale_json` 是否加了分支。
 
-**Q: 可以添加不常见的语言吗？**
-A: 可以！只要语言包格式正确，任何语言都可以添加。
+**Q: 占位符 `{0}` 没显示数字？**
+A: 占位符必须原样保留，翻译时不要改成 `{ 0 }` 或全角括号。
+
+**Q: 可以加任意语言吗？**
+A: 可以，只要 JSON 键与 `zh-SC.json` 完全一致。注意 macOS 的「隐藏」类菜单项只在 macOS 上渲染，但文本仍需翻译。
 
 ## 文件位置总览
 
 ```
-src/
-├── i18n/
-│   ├── index.ts              # 国际化核心逻辑（注册语言 + 翻译函数）
-│   └── locales/
-│       ├── zh.json           # 中文（参考模板）
-│       ├── en.json           # 英文
-│       └── ja.json           # 新增语言（按此格式添加）
-├── components/               # （已删除前端语言菜单组件）
-└── App.tsx                   # 监听 Tauri 事件，触发语言切换
+src/i18n/
+├── index.ts              # 语言包加载、t() 翻译、语言切换与持久化
+└── locales/
+    ├── zh-SC.json        # 简体中文（键最全，新增语言以它为模板）
+    ├── zh-TC.json        # 繁体中文
+    ├── en.json           # English
+    ├── ja.json           # 日本語
+    └── ko.json           # 한국어   ← 新增语言按此格式添加
 
 src-tauri/src/
-├── menu.rs                   # 原生菜单栏定义（添加菜单项）
-└── lib.rs                    # 菜单事件处理（监听点击 → 通知前端）
-
-docs/
-└── ADDING_LANGUAGE.md        # 本文档
+├── menu.rs               # LANGS + locale_json + 动态菜单构建
+└── lib.rs                # 菜单事件 → 通知前端切换
 ```
