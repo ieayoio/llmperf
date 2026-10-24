@@ -543,6 +543,12 @@ enum ParseAction {
     Events(Vec<StreamEvent>),
 }
 
+/// SSE 单行缓冲上限（字节）
+///
+/// 正常 SSE 每行几十到几百字节。若服务端长时间不发送换行（异常实现或恶意端点），
+/// 缓冲区会无界增长直到 OOM，因此超过上限时主动中断并报错。
+const MAX_SSE_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+
 /// SSE（Server-Sent Events）流解析器
 /// 负责将原始字节流按行切割，解析 `data: {...}` 格式的 SSE 事件
 struct SseParser {
@@ -611,6 +617,14 @@ impl SseParser {
             match self.stream.next().await {
                 Some(Ok(bytes)) => {
                     self.buffer.extend_from_slice(&bytes);
+                    // 防御异常/恶意端点：长时间不换行时缓冲会无界增长
+                    if self.buffer.len() > MAX_SSE_BUFFER_BYTES {
+                        self.stream_ended = true;
+                        return Some(Err(LlmError::StreamParse(format!(
+                            "SSE 单行数据超过 {} MiB，已中断",
+                            MAX_SSE_BUFFER_BYTES / 1024 / 1024
+                        ))));
+                    }
                 }
                 Some(Err(e)) => {
                     self.stream_ended = true;
@@ -899,6 +913,25 @@ impl LlmClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：服务端持续返回不含换行的数据时，行缓冲必须有上限，不能无界增长
+    #[tokio::test]
+    async fn test_sse_parser_rejects_oversized_line() {
+        // 每次 1 MiB 且不含 \n，累计超过上限时应当中断
+        let chunks: Vec<std::result::Result<Bytes, reqwest::Error>> = (0..8)
+            .map(|_| Ok(Bytes::from(vec![b'a'; 1024 * 1024])))
+            .collect();
+        let stream: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>> =
+            Box::pin(futures_util::stream::iter(chunks));
+
+        let mut parser = SseParser::new(stream);
+        let result = parser.next_event().await;
+
+        assert!(
+            matches!(result, Some(Err(LlmError::StreamParse(_)))),
+            "超过缓冲上限应返回 StreamParse 错误"
+        );
+    }
 
     #[test]
     fn test_chat_message_creation() {

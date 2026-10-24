@@ -166,6 +166,7 @@ fn emit_error(app: &tauri::AppHandle, window_id: usize, duration_ms: u128, error
         ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
+        canceled: false,
     });
 }
 
@@ -186,6 +187,7 @@ fn emit_chunk(
         ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
+        canceled: false,
     });
 }
 
@@ -206,6 +208,7 @@ fn emit_reasoning_chunk(
         ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
+        canceled: false,
     });
 }
 
@@ -228,6 +231,7 @@ fn emit_finished(
         ttft_ms,
         completion_tokens_per_second: completion_tps,
         prompt_tokens_per_second: prompt_tps,
+        canceled: false,
     });
 }
 
@@ -248,6 +252,8 @@ fn emit_canceled(
         ttft_ms: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
+        // 结构化标记：前端据这个字段设置取消态，不依赖 error 文案
+        canceled: true,
     });
 }
 
@@ -272,6 +278,7 @@ fn canceled_result(
         completion_tokens: None,
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
+        canceled: true,
         error: Some(CANCELED_MESSAGE.to_string()),
         reasoning_content: Some(reasoning_content),
     }
@@ -371,6 +378,7 @@ pub async fn execute_stream_request(
                 completion_tokens: None,
                 completion_tokens_per_second: None,
                 prompt_tokens_per_second: None,
+                canceled: false,
                 error: Some(error_msg),
             };
         }
@@ -422,6 +430,7 @@ pub async fn execute_stream_request(
                 completion_tokens: None,
                 completion_tokens_per_second: None,
                 prompt_tokens_per_second: None,
+                canceled: false,
                 error: Some(error_msg),
             };
         }
@@ -539,6 +548,7 @@ pub async fn execute_stream_request(
             // 半截数据算出的速度没有参考价值，不入库也不展示
             completion_tokens_per_second: None,
             prompt_tokens_per_second: None,
+            canceled: false,
             error: Some(err),
             reasoning_content: Some(accumulated_reasoning),
         };
@@ -564,6 +574,7 @@ pub async fn execute_stream_request(
         completion_tokens,
         completion_tokens_per_second: completion_tps,
         prompt_tokens_per_second: prompt_tps,
+        canceled: false,
         error: None,
         reasoning_content: Some(accumulated_reasoning),
     }

@@ -62,6 +62,8 @@ interface StreamChunkPayload {
   duration_ms: number;
   /** 首 token 延迟（毫秒），仅完成事件携带 */
   ttft_ms?: number | null;
+  /** 是否被用户主动取消（后端结构化字段，不依赖 error 文案） */
+  canceled?: boolean;
   /** 补全阶段 token 速度（每秒 token 数，无数据时为 null） */
   completion_tokens_per_second?: number | null;
   /** Prompt 阶段 token 速度（每秒 token 数，无数据时为 null） */
@@ -78,6 +80,8 @@ interface SingleResult {
   completion_tokens?: number;
   completion_tokens_per_second?: number;
   prompt_tokens_per_second?: number;
+  /** 是否被用户主动取消 */
+  canceled?: boolean;
   error: string | null;
 }
 
@@ -108,9 +112,6 @@ interface RunSummary {
   results: SingleResult[];
 }
 
-/** 取消态文案（与后端 `CANCELED_MESSAGE` 保持一致） */
-const CANCELED_MESSAGE = "用户已取消";
-
 /** 线性插值百分位：与 numpy.percentile 默认口径一致 */
 function percentileOfSorted(sorted: number[], p: number): number {
   if (sorted.length === 1) return sorted[0];
@@ -135,10 +136,10 @@ function computeStats(values: number[]): Stats {
 
 /** 把逐窗口结果聚合成一轮的汇总统计 */
 function summarizeRun(results: SingleResult[], wallClockMs: number): RunSummary {
-  const canceled = results.filter((r) => r.error === CANCELED_MESSAGE).length;
-  const failed = results.filter((r) => r.error && r.error !== CANCELED_MESSAGE).length;
+  const canceled = results.filter((r) => r.canceled === true).length;
+  const failed = results.filter((r) => r.canceled !== true && r.error).length;
   // 只统计成功且有数值的样本，避免失败/取消把均值带偏
-  const succeeded = results.filter((r) => !r.error);
+  const succeeded = results.filter((r) => !r.error && r.canceled !== true);
   const samples = (pick: (r: SingleResult) => number | undefined) =>
     succeeded
       .map(pick)
@@ -191,7 +192,8 @@ function buildCsv(results: SingleResult[]): string {
   const rows = results.map((r) =>
     [
       r.window_id + 1,
-      r.error ? (r.error === CANCELED_MESSAGE ? "canceled" : "error") : "ok",
+      // 取消优先判定，避免依赖 error 文案是否保留
+      r.canceled ? "canceled" : r.error ? "error" : "ok",
       r.ttft_ms ?? "",
       r.duration_ms,
       r.prompt_tokens ?? "",
@@ -335,8 +337,8 @@ function App() {
                   },
                 ]
               : w.messages;
-            // 区分"取消"与"真正错误"：后端对取消统一使用中文文案
-            const isCanceled = payload.error === "用户已取消";
+            // 区分"取消"与"真正错误"：以后端结构化字段为准，不比较文案
+            const isCanceled = payload.canceled === true;
             return {
               ...w,
               messages: nextMessages,

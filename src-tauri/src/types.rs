@@ -31,6 +31,11 @@ pub struct SingleResult {
     /// 优先取 API 的 `timings`；无 `timings` 且无法区分 prefill 阶段时为 None
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens_per_second: Option<f64>,
+    /// 是否被用户主动取消
+    ///
+    /// 用结构化字段而非 `error` 文案判别，避免展示文案调整后前端误判状态。
+    #[serde(default)]
+    pub canceled: bool,
     pub error: Option<String>,
 }
 
@@ -61,6 +66,9 @@ pub struct StreamChunkEvent {
     /// Prompt 阶段 token 速度（每秒 token 数，无数据时为 null）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens_per_second: Option<f64>,
+    /// 是否被用户主动取消（前端据此设置 canceled 状态，不依赖 error 文案）
+    #[serde(default)]
+    pub canceled: bool,
 }
 
 /// 前端传入的配置
@@ -119,6 +127,7 @@ mod tests {
             completion_tokens: Some(50),
             completion_tokens_per_second: Some(41.6),
             prompt_tokens_per_second: None,
+            canceled: false,
             error: None,
         }
     }
@@ -131,6 +140,8 @@ mod tests {
         assert_eq!(json["prompt_tokens"], 10);
         assert_eq!(json["completion_tokens"], 50);
         assert!(json.get("prompt_tokens_per_second").is_none(), "None 字段应被省略");
+        // 取消态字段必须总是输出（前端用 === true 判断，不依赖是否存在）
+        assert_eq!(json["canceled"], false);
     }
 
     /// 前端未配置采样参数时传 null，必须解析为 None（使用服务端默认值）

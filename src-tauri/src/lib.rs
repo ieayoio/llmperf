@@ -195,7 +195,6 @@ fn show_about<R: Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         // 注册取消注册表（按 window_id 管理 CancellationToken）
         .manage(cancel::CancelRegistry::new())
         .invoke_handler(tauri::generate_handler![

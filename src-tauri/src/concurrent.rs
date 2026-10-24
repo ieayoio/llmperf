@@ -85,6 +85,7 @@ pub async fn run_concurrent_requests(
                     completion_tokens: None,
                     completion_tokens_per_second: None,
                     prompt_tokens_per_second: None,
+                    canceled: false,
                     error: Some(format!("并发任务异常退出: {e}")),
                 });
             }
