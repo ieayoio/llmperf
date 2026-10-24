@@ -40,9 +40,9 @@
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use reqwest::Client as ReqwestClient;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 // ============================ 错误类型 ============================
@@ -207,15 +207,58 @@ pub struct ChatParams {
 
 // ============================ 响应模型（非流式） ============================
 
+/// Prompt 阶段的 token 明细（部分 API 提供，用于区分 cache 命中）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PromptTokensDetails {
+    /// cache 命中的 prompt token 数（命中部分通常不参与真实 prefill 计算）
+    #[serde(default)]
+    pub cached_tokens: u64,
+}
+
+/// 反序列化辅助：把显式 `null` 当成 0
+///
+/// `#[serde(default)]` 只能处理"字段缺失"，遇到显式 `null` 仍会整体报错，
+/// 而部分厂商的流式 usage 确实会返回 null。
+fn null_to_zero<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<u64>::deserialize(deserializer)?.unwrap_or(0))
+}
+
 /// Token 使用量统计
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// 所有字段都容忍缺失与 null：不同厂商的流式 usage 字段并不统一，
+/// 缺少单个字段不应让整条流解析失败。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
-    /// Prompt 阶段消耗的 token 数
+    /// Prompt 阶段消耗的 token 数（通常包含 cache 命中部分）
+    #[serde(default, deserialize_with = "null_to_zero")]
     pub prompt_tokens: u64,
-    /// 补全阶段消耗的 token 数
+    /// 补全阶段消耗的 token 数（推理模型会包含思考 token）
+    #[serde(default, deserialize_with = "null_to_zero")]
     pub completion_tokens: u64,
     /// 总共消耗的 token 数
+    #[serde(default, deserialize_with = "null_to_zero")]
     pub total_tokens: u64,
+    /// Prompt token 明细（cache 命中数），部分 API 返回
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+impl Usage {
+    /// 扣除 cache 命中后的 prompt token 数
+    ///
+    /// `prompt_tokens` 通常包含 cache 命中的部分，直接用它反推 prefill 速度会明显偏高，
+    /// 因此退化路径统一使用本方法返回的有效 token 数。
+    pub fn uncached_prompt_tokens(&self) -> u64 {
+        let cached = self
+            .prompt_tokens_details
+            .as_ref()
+            .map(|d| d.cached_tokens)
+            .unwrap_or(0);
+        self.prompt_tokens.saturating_sub(cached)
+    }
 }
 
 /// Token 生成速度统计（来自部分 API 的 `timings` 字段，如 vLLM）
@@ -265,28 +308,32 @@ pub struct Timings {
 impl Timings {
     /// 获取补全阶段的 token 速度（每秒 token 数）
     ///
-    /// 优先返回 `predicted_per_second`，若为空则尝试计算 `completion_tokens / (predicted_ms / 1000.0)`
+    /// 优先返回 `predicted_per_second`，若为空则尝试计算 `predicted_n / (predicted_ms / 1000.0)`。
+    /// 计算结果为 0 / 负数 / 非有限值时一律返回 None，交由调用方走退化路径，
+    /// 避免把无意义的 0 当成"有效数据"而跳过更可靠的 usage 反推。
     pub fn completion_tokens_per_second(&self) -> Option<f64> {
-        if self.predicted_per_second > 0.0 {
-            return Some(self.predicted_per_second);
-        }
-        if self.predicted_ms > 0.0 {
-            let seconds = self.predicted_ms / 1000.0;
-            return Some(self.predicted_n as f64 / seconds);
-        }
-        None
+        let tps = if self.predicted_per_second > 0.0 {
+            self.predicted_per_second
+        } else if self.predicted_ms > 0.0 {
+            self.predicted_n as f64 / (self.predicted_ms / 1000.0)
+        } else {
+            return None;
+        };
+        (tps > 0.0 && tps.is_finite()).then_some(tps)
     }
 
     /// 获取 Prompt 阶段的 token 速度（每秒 token 数）
+    ///
+    /// 与 `completion_tokens_per_second` 一致，非法值统一返回 None。
     pub fn prompt_tokens_per_second(&self) -> Option<f64> {
-        if self.prompt_per_second > 0.0 {
-            return Some(self.prompt_per_second);
-        }
-        if self.prompt_ms > 0.0 {
-            let seconds = self.prompt_ms / 1000.0;
-            return Some(self.prompt_n as f64 / seconds);
-        }
-        None
+        let tps = if self.prompt_per_second > 0.0 {
+            self.prompt_per_second
+        } else if self.prompt_ms > 0.0 {
+            self.prompt_n as f64 / (self.prompt_ms / 1000.0)
+        } else {
+            return None;
+        };
+        (tps > 0.0 && tps.is_finite()).then_some(tps)
     }
 }
 
@@ -378,51 +425,6 @@ impl ChatCompletion {
             .as_ref()
             .and_then(|t| t.prompt_tokens_per_second())
     }
-
-    /// 计算补全阶段的 token 速度（每秒 token 数），兼容无 `timings` 字段的 API
-    ///
-    /// 优先级：
-    /// 1. 若 `timings` 存在，直接使用 `timings.predicted_per_second`
-    /// 2. 否则用 `usage.completion_tokens` 除以 `duration_ms` 反推速度
-    ///
-    /// # 参数
-    /// - `duration_ms`: 请求总耗时（毫秒），通常为从发起请求到收到最后一个 chunk 的时间
-    ///
-    /// # 示例
-    /// ```rust,no_run
-    /// # use llmperf_lib::*;
-    /// let completion: ChatCompletion = /* ... */;
-    /// let duration_ms = 1500u128; // 1.5 秒
-    /// let tps = completion.completion_tokens_per_second_with_duration(duration_ms);
-    /// ```
-    pub fn completion_tokens_per_second_with_duration(&self, duration_ms: u128) -> Option<f64> {
-        // 优先从 timings 获取（若 API 支持）
-        if let Some(tps) = self.completion_tokens_per_second() {
-            return Some(tps);
-        }
-        // 降级：用 usage 反推
-        let usage = self.usage.as_ref()?;
-        if usage.completion_tokens == 0 || duration_ms == 0 {
-            return None;
-        }
-        let duration_s = duration_ms as f64 / 1000.0;
-        Some(usage.completion_tokens as f64 / duration_s)
-    }
-
-    /// 计算 Prompt 阶段的 token 速度（每秒 token 数），兼容无 `timings` 字段的 API
-    ///
-    /// 同 `completion_tokens_per_second_with_duration`，优先使用 timings，否则反推。
-    pub fn prompt_tokens_per_second_with_duration(&self, duration_ms: u128) -> Option<f64> {
-        if let Some(tps) = self.prompt_tokens_per_second() {
-            return Some(tps);
-        }
-        let usage = self.usage.as_ref()?;
-        if usage.prompt_tokens == 0 || duration_ms == 0 {
-            return None;
-        }
-        let duration_s = duration_ms as f64 / 1000.0;
-        Some(usage.prompt_tokens as f64 / duration_s)
-    }
 }
 
 // ============================ 流式响应模型 ============================
@@ -442,14 +444,17 @@ struct ChatChunk {
     timings: Option<Timings>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ChunkChoice {
+    /// 部分实现会在结束 chunk 中省略 delta，缺失时按空增量处理
+    #[serde(default)]
     delta: DeltaMessage,
+    #[serde(default)]
     finish_reason: Option<String>,
 }
 
 /// 流式增量消息
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DeltaMessage {
     #[allow(dead_code)]
     role: Option<String>,
@@ -473,6 +478,11 @@ pub struct FinishInfo {
     pub usage: Option<Usage>,
     /// Token 速度统计（vLLM 等 API 在最后一个 chunk 提供；优先于 usage + 时间戳反推）
     pub timings: Option<Timings>,
+    /// 首个增量（思考或正文）到达时刻，由 SSE 解析器在字节到达时打点
+    ///
+    /// 用于估算 prefill 阶段耗时。注意不能取"首个正文"时刻：推理模型会先长时间输出
+    /// 思考内容，用正文时刻会把思考生成时间误算进 prefill。
+    pub first_token_at: Option<Instant>,
 }
 
 /// 流式事件枚举 —— 调用方通过匹配此枚举处理不同的流式数据
@@ -545,6 +555,8 @@ struct SseParser {
     /// 同 chunk 解析出的剩余事件：当 `into_events` 产出多条事件（推理 + 正文），
     /// 首条立即返回，其余缓存在这里，按顺序在下一次 `next_event` 中派发。
     pending_events: Vec<StreamEvent>,
+    /// 首个增量（思考或正文）到达时刻，随 Finish 事件带出，用于计算 prefill 耗时
+    first_token_at: Option<Instant>,
 }
 
 impl SseParser {
@@ -554,6 +566,7 @@ impl SseParser {
             buffer: Vec::with_capacity(4096),
             stream_ended: false,
             pending_events: Vec::new(),
+            first_token_at: None,
         }
     }
 
@@ -575,7 +588,18 @@ impl SseParser {
                     return Some(Ok(first));
                 }
                 ParseAction::Skip => continue,       // 空行或无效行，继续解析
-                ParseAction::StreamEnd => return None, // [DONE] 标记
+                ParseAction::StreamEnd => {
+                    // 收到 [DONE]：补发一个"流正常结束"标记事件。
+                    // 调用方据此区分"服务端确认结束"与"连接被中途截断"
+                    // （后者不会产生任何 Finish 事件）。
+                    self.stream_ended = true;
+                    return Some(Ok(StreamEvent::Finish(FinishInfo {
+                        reason: String::new(),
+                        usage: None,
+                        timings: None,
+                        first_token_at: self.first_token_at,
+                    })));
+                }
                 ParseAction::NeedMore => {}            // 需要更多数据，继续往下读
             }
 
@@ -641,6 +665,8 @@ impl SseParser {
         match serde_json::from_str::<ChatChunk>(data) {
             Ok(chunk) => {
                 let mut events = chunk.into_events();
+                // 在解析层给事件打时间戳（比消费端更接近字节真实到达时刻）
+                self.stamp_first_token(&mut events);
                 match events.len() {
                     0 => ParseAction::Skip, // chunk 中无有意义的数据
                     1 => ParseAction::Event(Ok(events.remove(0))),
@@ -650,6 +676,23 @@ impl SseParser {
             Err(e) => ParseAction::Event(Err(LlmError::StreamParse(format!(
                 "JSON解析失败: {e}, 原始数据: {data}"
             )))),
+        }
+    }
+
+    /// 给事件打时间戳：记录首个增量到达时刻，并回填到 Finish 事件
+    ///
+    /// 在 SSE 解析层打点比在消费端（channel 出队、跨任务调度之后）更接近
+    /// 字节真正到达的时刻，高并发压测时差异尤其明显。
+    fn stamp_first_token(&mut self, events: &mut [StreamEvent]) {
+        for event in events.iter_mut() {
+            match event {
+                StreamEvent::ReasoningDelta(_) | StreamEvent::ContentDelta(_) => {
+                    if self.first_token_at.is_none() {
+                        self.first_token_at = Some(Instant::now());
+                    }
+                }
+                StreamEvent::Finish(info) => info.first_token_at = self.first_token_at,
+            }
         }
     }
 }
@@ -685,25 +728,26 @@ impl ChatChunk {
                 }
             }
 
-            // 结束标记（附带 usage 信息）
+            // 结束标记（附带 usage / timings 信息）
             if let Some(finish_reason) = &choice.finish_reason {
                 events.push(StreamEvent::Finish(FinishInfo {
                     reason: finish_reason.clone(),
                     usage: self.usage.clone(),
                     timings: self.timings.clone(),
+                    first_token_at: None, // 由 SseParser 打点后回填
                 }));
             }
         }
 
-        // 某些 API 的最后一个 chunk 只包含 usage 而 choices 为空
-        if events.is_empty() {
-            if let Some(usage) = self.usage {
-                events.push(StreamEvent::Finish(FinishInfo {
-                    reason: String::new(),
-                    usage: Some(usage),
-                    timings: self.timings.clone(),
-                }));
-            }
+        // 某些 API 的最后一个 chunk 只包含 usage / timings 而 choices 为空。
+        // 只要两者任一存在就必须产出 Finish 事件，否则 timings 会被丢弃。
+        if events.is_empty() && (self.usage.is_some() || self.timings.is_some()) {
+            events.push(StreamEvent::Finish(FinishInfo {
+                reason: String::new(),
+                usage: self.usage,
+                timings: self.timings,
+                first_token_at: None, // 由 SseParser 打点后回填
+            }));
         }
 
         events
@@ -965,6 +1009,7 @@ mod tests {
             reason: "stop".to_string(),
             usage: None,
             timings: None,
+            first_token_at: None,
         }));
 
         assert_eq!(acc.reasoning_content, "思考中");
@@ -1190,52 +1235,117 @@ mod tests {
         assert!((timings_no_per_second.completion_tokens_per_second().unwrap() - 50.0).abs() < 0.0001);
     }
 
-    /// 测试无 timings 时通过 usage + duration_ms 反推 token 速度（参考2场景）
+    /// 边界：timings 中的非法值（0 / 除数过小）必须返回 None，交由退化路径处理
     #[test]
-    fn test_completion_tokens_per_second_with_duration() {
-        // 参考2：无 timings，只有 usage
-        let json = r#"{
-            "id": "chatcmpl-9d2c5c11edc1e071",
-            "object": "chat.completion",
-            "created": 1786084098,
-            "model": "LLM-AI-HEAT",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "你好！"},
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 11,
-                "completion_tokens": 212,
-                "total_tokens": 223
+    fn test_timings_ignores_zero_and_invalid() {
+        // 全 0 timings
+        assert!(Timings::default().completion_tokens_per_second().is_none());
+        assert!(Timings::default().prompt_tokens_per_second().is_none());
+
+        // predicted_ms > 0 但 predicted_n = 0 → 速度为 0，应视为无效
+        let zero_tokens = Timings {
+            predicted_n: 0,
+            predicted_ms: 100.0,
+            ..Default::default()
+        };
+        assert!(zero_tokens.completion_tokens_per_second().is_none());
+    }
+
+    /// usage 字段缺失 / 为 null 时不应让整条流解析失败（不同厂商实现差异很大）
+    #[test]
+    fn test_usage_tolerates_missing_fields() {
+        let chunk: ChatChunk = serde_json::from_str(
+            r#"{"choices":[],"usage":{"completion_tokens":42}}"#,
+        )
+        .expect("缺失字段的 usage 应能反序列化");
+        let usage = chunk.usage.expect("usage 应存在");
+        assert_eq!(usage.prompt_tokens, 0);
+        assert_eq!(usage.completion_tokens, 42);
+        assert_eq!(usage.uncached_prompt_tokens(), 0);
+
+        let chunk_null: ChatChunk = serde_json::from_str(
+            r#"{"choices":[],"usage":{"prompt_tokens":null,"completion_tokens":null}}"#,
+        )
+        .expect("null 字段应能按默认值解析");
+        let usage_null = chunk_null.usage.expect("usage 应存在");
+        assert_eq!(usage_null.completion_tokens, 0);
+    }
+
+    /// 结束 chunk 省略 delta 时不应报错（部分实现在 finish chunk 里只给 finish_reason）
+    #[test]
+    fn test_chunk_without_delta_is_tolerated() {
+        let chunk: ChatChunk = serde_json::from_str(
+            r#"{"choices":[{"index":0,"finish_reason":"stop"}]}"#,
+        )
+        .expect("缺少 delta 的 chunk 应能反序列化");
+        let events = chunk.into_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], StreamEvent::Finish(_)));
+    }
+
+    /// 只有 timings、没有 usage 的尾 chunk 也必须产出 Finish，否则 timings 会被丢弃
+    #[test]
+    fn test_timings_only_chunk_emits_finish() {
+        let chunk: ChatChunk = serde_json::from_str(
+            r#"{"choices":[],"timings":{"prompt_n":4,"prompt_ms":100,"prompt_per_second":40,"predicted_n":42,"predicted_ms":1000,"predicted_per_second":42}}"#,
+        )
+        .expect("timings-only chunk 应能反序列化");
+        let events = chunk.into_events();
+        assert_eq!(events.len(), 1, "timings-only chunk 必须产出 Finish 事件");
+        match &events[0] {
+            StreamEvent::Finish(info) => {
+                assert!(info.usage.is_none());
+                let timings = info.timings.as_ref().expect("timings 不应丢失");
+                assert!((timings.predicted_per_second - 42.0).abs() < 0.001);
             }
-        }"#;
-        let completion: ChatCompletion = serde_json::from_str(json).unwrap();
-        assert!(completion.timings.is_none());
+            other => panic!("预期 Finish 事件，实际为 {other:?}"),
+        }
+    }
 
-        // 假设耗时 2000ms，completion_tokens=212，速度应为 212/2 = 106 tok/s
-        let tps = completion.completion_tokens_per_second_with_duration(2000);
-        assert!(tps.is_some());
-        assert!((tps.unwrap() - 106.0).abs() < 0.0001);
+    /// 端到端模拟 SSE 字节流：
+    /// 1. 思考增量先于正文增量到达，首个增量必须是 ReasoningDelta
+    /// 2. timings 与 usage 分散在两个 chunk 中，两者都不能丢
+    /// 3. [DONE] 必须补发一个 Finish 事件（用于区分正常结束与中途截断）
+    #[tokio::test]
+    async fn test_sse_parser_stamps_first_token_and_keeps_timings() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"嗯\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n",
+            "data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{}}],\"timings\":{\"prompt_n\":4,\"prompt_ms\":100,\"prompt_per_second\":40,\"predicted_n\":10,\"predicted_ms\":500,\"predicted_per_second\":20}}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":6,\"completion_tokens\":10,\"total_tokens\":16}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let bytes = Bytes::copy_from_slice(sse.as_bytes());
+        let stream: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>> =
+            Box::pin(futures_util::stream::iter(vec![Ok(bytes)]));
 
-        // prompt_tokens=11，速度应为 11/2 = 5.5 tok/s
-        let pt = completion.prompt_tokens_per_second_with_duration(2000);
-        assert!(pt.is_some());
-        assert!((pt.unwrap() - 5.5).abs() < 0.0001);
+        let mut parser = SseParser::new(stream);
+        let mut events = Vec::new();
+        while let Some(event) = parser.next_event().await {
+            events.push(event.expect("SSE 解析不应失败"));
+        }
 
-        // 有 timings 时，with_duration 应优先使用 timings，忽略 duration_ms
-        let json_with_timings = r#"{
-            "id": "test",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "x"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            "timings": {
-                "prompt_n": 1, "prompt_ms": 100.0, "prompt_per_token_ms": 100.0, "prompt_per_second": 10.0,
-                "predicted_n": 1, "predicted_ms": 500.0, "predicted_per_token_ms": 500.0, "predicted_per_second": 2.0
-            }
-        }"#;
-        let completion2: ChatCompletion = serde_json::from_str(json_with_timings).unwrap();
-        // 有 timings 时，无论 duration_ms 传什么，都返回 timings 里的值
-        assert!((completion2.completion_tokens_per_second_with_duration(9999).unwrap() - 2.0).abs() < 0.0001);
-        assert!((completion2.prompt_tokens_per_second_with_duration(9999).unwrap() - 10.0).abs() < 0.0001);
+        // 事件顺序：思考 → 正文 → Finish(timings) → Finish(usage) → Finish([DONE])
+        assert!(matches!(events[0], StreamEvent::ReasoningDelta(_)));
+        assert!(matches!(events[1], StreamEvent::ContentDelta(_)));
+
+        let finishes: Vec<&FinishInfo> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::Finish(info) => Some(info),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finishes.len(), 3, "应包含 finish/usage/[DONE] 三个 Finish 事件");
+
+        // 首个增量（思考）时刻必须被打点，且早于 Finish 到达
+        let first_token_at = finishes[0].first_token_at.expect("首 token 时刻应被打点");
+        assert!(finishes[0].timings.is_some(), "timings 不应丢失");
+        assert!(finishes[0].usage.is_none());
+        assert!(finishes[1].usage.is_some());
+        assert!(finishes[1].timings.is_none());
+        assert_eq!(finishes[1].first_token_at, Some(first_token_at));
+        // [DONE] 补发的 Finish：三字段全空，仅表示"流正常结束"
+        assert!(finishes[2].usage.is_none() && finishes[2].timings.is_none());
     }
 }

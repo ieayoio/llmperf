@@ -9,10 +9,15 @@ pub struct SingleResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     pub duration_ms: u128,
-    /// 补全阶段 token 速度（每秒 token 数），无 timings 时由 usage / duration_ms 反推
+    /// 补全阶段 token 速度（每秒 token 数）
+    ///
+    /// 优先取 API 的 `timings`；无 `timings` 时用 `usage.completion_tokens`
+    /// 除以「总耗时 - 首个增量到达时刻」反推，无法可靠计算时为 None
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_per_second: Option<f64>,
-    /// Prompt 阶段 token 速度（每秒 token 数），无 timings 时由 usage / duration_ms 反推
+    /// Prompt 阶段 token 速度（每秒 token 数）
+    ///
+    /// 优先取 API 的 `timings`；无 `timings` 且无法区分 prefill 阶段时为 None
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens_per_second: Option<f64>,
     pub error: Option<String>,
@@ -54,6 +59,12 @@ pub struct LLMRequestConfig {
     pub messages: Vec<ChatMessage>,
     /// 窗口标识，用于区分不同窗口的流式事件
     pub window_id: usize,
+    /// 请求超时（秒），不传则使用后端默认值
+    ///
+    /// reqwest 的超时覆盖整个请求生命周期，推理模型长输出容易超过 2 分钟，
+    /// 因此需要允许调用方覆盖默认值。
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 }
 
 /// 单条聊天消息

@@ -23,6 +23,8 @@ interface ChatMessage {
   content: string;
   /** 思考/推理内容（推理模型特有） */
   reasoningContent?: string;
+  /** 该条回复的思考耗时（毫秒），随消息保存，避免历史消息共用同一个值 */
+  reasoningDuration?: number;
 }
 
 /** 单个对话窗口的状态 */
@@ -44,8 +46,6 @@ interface ChatWindow {
   accumulatedReasoning: string;
   /** 思考结束时间（首个正文 chunk 到达时的 duration_ms），用于计算思考耗时 */
   reasoningEndTime?: number;
-  /** 思考阶段耗时（毫秒），即从请求开始到正文内容首次输出的时间 */
-  reasoningDuration?: number;
 }
 
 /** 流式 chunk 事件 */
@@ -123,6 +123,10 @@ function App() {
   // 监听流式事件
   useEffect(() => {
     let cancelled = false;
+    // listen 返回 Promise<UnlistenFn>，必须在 cleanup 里真正取消监听，
+    // 否则每次挂载（含 StrictMode 双挂载）都会残留一个监听器
+    let unlisten: (() => void) | undefined;
+
     listen<StreamChunkPayload>("stream_chunk", (event) => {
       if (cancelled) return;
       const payload = event.payload;
@@ -142,18 +146,25 @@ function App() {
             // 配合 handleSend 中"每个窗口追加 user 消息"的设计，确保每个窗口
             // 都能完整看到"你 → AI"的对话流（多轮时也各自累积，不会丢历史）。
             // 取消时也保留已流出的部分内容（accumulatedContent）作为可见输出。
-            const nextMessages = [
-              ...w.messages,
-              {
-                role: "assistant" as const,
-                content:
-                  w.accumulatedContent ||
-                  (payload.error ? `错误: ${payload.error}` : ""),
-                ...(w.accumulatedReasoning.length > 0
-                  ? { reasoningContent: w.accumulatedReasoning }
-                  : {}),
-              },
-            ];
+            //
+            // 注意：没有任何输出时不写入消息——错误/取消提示由下方状态条展示，
+            // 若把"错误: xxx"当成 assistant 内容写进历史，会被当成上下文发给模型。
+            const hasOutput =
+              w.accumulatedContent.length > 0 || w.accumulatedReasoning.length > 0;
+            const nextMessages = hasOutput
+              ? [
+                  ...w.messages,
+                  {
+                    role: "assistant" as const,
+                    content: w.accumulatedContent,
+                    ...(w.accumulatedReasoning.length > 0
+                      ? { reasoningContent: w.accumulatedReasoning }
+                      : {}),
+                    /** 思考耗时：首个正文 chunk 到达时的 duration_ms，无正文则等于总耗时 */
+                    reasoningDuration: w.reasoningEndTime ?? payload.duration_ms,
+                  },
+                ]
+              : w.messages;
             // 区分"取消"与"真正错误"：后端对取消统一使用中文文案
             const isCanceled = payload.error === "用户已取消";
             return {
@@ -166,8 +177,6 @@ function App() {
                 : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
-              /** 思考耗时：首个正文 chunk 到达时的 duration_ms，无正文则等于总耗时 */
-              reasoningDuration: w.reasoningEndTime ?? payload.duration_ms,
               // 取消时清空 token 速度，避免显示误导性数字
               completionTps: isCanceled
                 ? undefined
@@ -199,10 +208,15 @@ function App() {
           }
         })
       );
+    }).then((fn) => {
+      // 若组件已卸载则立即取消，避免残留监听
+      if (cancelled) fn();
+      else unlisten = fn;
     });
 
     return () => {
       cancelled = true;
+      unlisten?.();
     };
   }, []);
 
@@ -263,8 +277,11 @@ function App() {
               status: "sending" as const,
               accumulatedContent: "",
               accumulatedReasoning: "",
+              reasoningEndTime: undefined,
               completionTps: undefined,
               promptTps: undefined,
+              // 清空上一轮的耗时，避免发送中仍显示旧值
+              duration: undefined,
               error: undefined,
             }
           : w
@@ -544,7 +561,13 @@ function ChatWindow({
               <details className="reasoning-details">
                 <summary className="reasoning-summary">
                   <span>{t("chat.reasoningSummary")}</span>
-                  <span className="reasoning-duration"> · {formatDuration(win.reasoningDuration)}</span>
+                  {/* 耗时为 0 / 缺失时 formatDuration 返回空串，此时不渲染分隔符，避免出现孤立的「·」 */}
+                  {formatDuration(msg.reasoningDuration) && (
+                    <span className="reasoning-duration">
+                      {" · "}
+                      {formatDuration(msg.reasoningDuration)}
+                    </span>
+                  )}
                 </summary>
                 <div className="reasoning-content-text">{msg.reasoningContent}</div>
               </details>

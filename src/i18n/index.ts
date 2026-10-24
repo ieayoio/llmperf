@@ -95,7 +95,9 @@ for (const [code, locale] of Object.entries(localeFiles)) {
  */
 export function t(key: string, ...replacements: (string | number | boolean)[]): string {
   const locale = flatLocales[currentLang] || flatLocales["zh-SC"];
-  let text = locale[key] || locale[`zh-SC.${key}`] || key; // fallback 到简体中文，再 fallback 到 key 本身
+  // 回退链：当前语言 → 简体中文（平铺字典）→ key 本身
+  // 注意不能写成 locale[`zh-SC.${key}`]，那是在当前语言字典里找带前缀的 key，永远取不到值
+  let text = locale[key] ?? flatLocales["zh-SC"]?.[key] ?? key;
 
   // 替换 {0}, {1} 等占位符
   replacements.forEach((value, index) => {

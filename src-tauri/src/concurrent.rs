@@ -17,6 +17,8 @@ pub async fn run_concurrent_requests(
     let api_key = config.api_key.trim().to_string();
     let model = config.model.trim().to_string();
     let messages = config.messages.clone();
+    // 超时配置透传给每个子任务（None 时由 execute_stream_request 使用默认值）
+    let timeout_secs = config.timeout_secs;
     // 使用 config.window_id 作为基准窗口标识
     let base_window_id = config.window_id;
 
@@ -29,6 +31,7 @@ pub async fn run_concurrent_requests(
             messages: messages.clone(),
             // 每个任务使用独立的 window_id，避免事件混淆
             window_id: base_window_id + i,
+            timeout_secs,
         })
         .collect();
 
@@ -36,7 +39,7 @@ pub async fn run_concurrent_requests(
     let registry = app.state::<CancelRegistry>();
     let registry = registry.inner().clone();
 
-    // 启动所有并发任务
+    // 启动所有并发任务（同时保存 window_id，便于 panic 时生成对应占位结果）
     let handles: Vec<_> = configs
         .into_iter()
         .map(|config| {
@@ -44,14 +47,15 @@ pub async fn run_concurrent_requests(
             // 使用 config.window_id 而不是 enumerate 的索引
             let window_id = config.window_id;
             let registry = registry.clone();
-            tauri::async_runtime::spawn(async move {
+            let handle = tauri::async_runtime::spawn(async move {
                 // 为该窗口注册一个独立的取消 token
                 let token = registry.register(window_id).await;
                 let result = execute_stream_request(app, window_id, config, token).await;
                 // 请求结束（无论正常 / 错误 / 取消）后清理 token
                 registry.unregister(window_id).await;
                 result
-            })
+            });
+            (window_id, handle)
         })
         .collect();
 
@@ -60,13 +64,13 @@ pub async fn run_concurrent_requests(
     // 注意：实际错误信息已通过 stream_chunk 事件发到前端，
     // 这里的占位 SingleResult 仅为保证 Vec 长度对齐，便于调用方调试。
     let mut results = Vec::with_capacity(concurrency);
-    for handle in handles {
+    for (window_id, handle) in handles {
         match handle.await {
             Ok(r) => results.push(r),
             Err(e) => {
-                eprintln!("[concurrent] 子任务 panic: {e}");
+                eprintln!("[concurrent] 窗口 {window_id} 子任务 panic: {e}");
                 results.push(SingleResult {
-                    window_id: 0,
+                    window_id,
                     assistant_content: String::new(),
                     reasoning_content: None,
                     duration_ms: 0,
