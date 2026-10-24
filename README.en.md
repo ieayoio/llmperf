@@ -99,6 +99,7 @@ All timings are measured client-side; only the token speeds fall back to server-
 | Serialization | [serde](https://serde.rs/) / [serde_json](https://crates.io/crates/serde_json) |
 | Cancellation | [tokio-util](https://crates.io/crates/tokio-util) (`CancellationToken`) |
 | System integration | [tauri-plugin-opener](https://crates.io/crates/tauri-plugin-opener) (opening project links and the downloads folder) |
+| File saving | [tauri-plugin-dialog](https://crates.io/crates/tauri-plugin-dialog) (native save dialog when exporting) |
 | Charts | Hand-written SVG (no chart library) |
 
 ## 📦 Installation
@@ -197,7 +198,7 @@ Steps run serially — the next step starts only after the previous one has full
 - **Sweep mode**: exports **one row per step**, with columns
   `concurrency,rounds,success,failed,canceled,wall_clock_ms,throughput_tps,ttft_p50_ms,ttft_p95_ms,first_content_p50_ms,tpot_avg_ms,completion_tps_p50,duration_p95_ms,itl_p95_avg_ms`
 
-Files are written to the system downloads directory with a UTF-8 BOM so Excel reads them correctly.
+Exporting opens a native save dialog: it defaults to the system downloads directory with a timestamped file name, and you can change both the directory and the file name; canceling writes nothing. Files carry a UTF-8 BOM so Excel reads them correctly.
 
 ## 🔧 Architecture Overview
 

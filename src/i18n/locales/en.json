@@ -103,6 +103,10 @@
     "exported": "Saved to {0}",
     "exportFailed": "Export failed: {0}"
   },
+  "export": {
+    "saveTitle": "Save export file",
+    "csvFilter": "CSV file"
+  },
   "mode": {
     "chat": "Chat",
     "sweep": "Sweep"

@@ -1,6 +1,8 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { downloadDir, join } from "@tauri-apps/api/path";
+import { save } from "@tauri-apps/plugin-dialog";
 import { initI18n, t, getCurrentLanguage, setLanguage } from "./i18n";
 import {
   buildCsv,
@@ -147,6 +149,29 @@ function formatAccel(accel: string): string[] {
  * 也让「全部取消」能同时覆盖两边的请求。
  */
 const SWEEP_WINDOW_BASE = 100_000;
+
+/**
+ * 弹出系统保存对话框，让用户确认导出目录与文件名
+ *
+ * 默认定位到下载目录并带时间戳文件名；用户取消时返回 null。
+ * 未填扩展名时自动补 `.csv`（部分平台不会按过滤器自动追加后缀）。
+ */
+async function pickCsvSavePath(defaultFilename: string): Promise<string | null> {
+  // 默认目录优先用系统下载目录；取不到时只给文件名，由对话框使用系统默认目录
+  let defaultPath = defaultFilename;
+  try {
+    defaultPath = await join(await downloadDir(), defaultFilename);
+  } catch (e) {
+    console.warn("[llmperf] 获取下载目录失败，改用系统默认目录:", e);
+  }
+  const selected = await save({
+    title: t("export.saveTitle"),
+    defaultPath,
+    filters: [{ name: t("export.csvFilter"), extensions: ["csv"] }],
+  });
+  if (!selected) return null;
+  return selected.toLowerCase().endsWith(".csv") ? selected : `${selected}.csv`;
+}
 
 /** 高级采样参数（全部为 null 时表示不传，交给服务端默认值） */
 interface SamplingParams {
@@ -652,16 +677,19 @@ function App() {
     }
   };
 
-  /** 把最近一轮逐窗口明细导出为 CSV（写入系统下载目录） */
+  /** 把最近一轮逐窗口明细导出为 CSV（先弹窗确认目录与文件名） */
   const exportCsv = async () => {
     if (!lastRun) return;
     try {
+      const path = await pickCsvSavePath(buildExportFilename("llmperf"));
+      // 用户取消保存：保持原有提示，不写入任何文件
+      if (!path) return;
       // 加 BOM，让 Excel 正确识别 UTF-8（错误信息里可能有中文）
-      const path = await invoke<string>("save_text_file", {
-        filename: buildExportFilename("llmperf"),
+      const saved = await invoke<string>("save_text_file", {
+        path,
         content: "\uFEFF" + buildCsv(lastRun.results),
       });
-      setExportHint(t("summary.exported", path));
+      setExportHint(t("summary.exported", saved));
     } catch (e) {
       setExportHint(t("summary.exportFailed", String(e)));
     }
@@ -759,15 +787,17 @@ function App() {
     await cancelAll();
   };
 
-  /** 导出梯度扫描汇总（每档一行，便于后续画图或回归对比） */
+  /** 导出梯度扫描汇总（每档一行，先弹窗确认目录与文件名） */
   const exportSweepCsv = async () => {
     if (sweepPoints.length === 0) return;
     try {
-      const path = await invoke<string>("save_text_file", {
-        filename: buildExportFilename("llmperf-sweep"),
+      const path = await pickCsvSavePath(buildExportFilename("llmperf-sweep"));
+      if (!path) return;
+      const saved = await invoke<string>("save_text_file", {
+        path,
         content: "\uFEFF" + buildSweepCsv(sweepPoints),
       });
-      setSweepExportHint(t("sweep.exported", path));
+      setSweepExportHint(t("sweep.exported", saved));
     } catch (e) {
       setSweepExportHint(t("sweep.exportFailed", String(e)));
     }

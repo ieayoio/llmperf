@@ -103,6 +103,10 @@
     "exported": "已保存到 {0}",
     "exportFailed": "导出失败: {0}"
   },
+  "export": {
+    "saveTitle": "保存导出文件",
+    "csvFilter": "CSV 文件"
+  },
   "mode": {
     "chat": "对话模式",
     "sweep": "梯度扫描"

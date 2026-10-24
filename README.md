@@ -99,6 +99,7 @@
 | 序列化 | [serde](https://serde.rs/) / [serde_json](https://crates.io/crates/serde_json) |
 | 取消控制 | [tokio-util](https://crates.io/crates/tokio-util)（`CancellationToken`） |
 | 系统集成 | [tauri-plugin-opener](https://crates.io/crates/tauri-plugin-opener)（打开项目链接与下载目录） |
+| 文件保存 | [tauri-plugin-dialog](https://crates.io/crates/tauri-plugin-dialog)（导出时弹出系统保存对话框） |
 | 图表 | 手写 SVG（不引入图表库） |
 
 ## 📦 安装
@@ -197,7 +198,7 @@ npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
 - **梯度扫描**：导出**每档一行**的汇总，字段为
   `concurrency,rounds,success,failed,canceled,wall_clock_ms,throughput_tps,ttft_p50_ms,ttft_p95_ms,first_content_p50_ms,tpot_avg_ms,completion_tps_p50,duration_p95_ms,itl_p95_avg_ms`
 
-文件写入系统下载目录，带 UTF-8 BOM，Excel 直接打开不乱码。
+导出时弹出系统保存对话框：默认目录为系统下载目录、默认文件名带时间戳，用户可修改目录与文件名，取消则不会生成文件。文件带 UTF-8 BOM，Excel 直接打开不乱码。
 
 ## 🔧 架构说明
 

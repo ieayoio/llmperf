@@ -103,6 +103,10 @@
     "exported": "{0}에 저장했습니다",
     "exportFailed": "내보내기 실패: {0}"
   },
+  "export": {
+    "saveTitle": "내보내기 파일 저장",
+    "csvFilter": "CSV 파일"
+  },
   "mode": {
     "chat": "채팅 모드",
     "sweep": "동시성 스윕"

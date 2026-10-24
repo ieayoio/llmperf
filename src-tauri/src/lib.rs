@@ -6,6 +6,7 @@ mod cancel;
 mod llm_tool;
 mod menu;
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use tauri::{Emitter, Manager, Runtime};
@@ -123,37 +124,36 @@ fn get_menu_shortcuts() -> Vec<menu::Shortcut> {
     menu::shortcuts()
 }
 
-/// 校验导出文件名：只允许纯文件名
+/// 校验导出路径：必须是绝对路径且指向文件
 ///
-/// 拒绝空串、路径分隔符与上跳片段，防止被利用做任意路径写入。
-fn is_safe_export_filename(filename: &str) -> bool {
-    !filename.is_empty()
-        && !filename.contains('/')
-        && !filename.contains('\\')
-        && !filename.contains("..")
+/// 路径由系统保存对话框返回（用户可自选目录与文件名），这里只做兜底校验：
+/// 拒绝相对路径（会落到当前工作目录）与已存在的目录（避免把目录当文件写）。
+fn validate_export_path(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("保存路径必须是绝对路径".to_string());
+    }
+    if path.is_dir() {
+        return Err("保存路径不能是目录".to_string());
+    }
+    if path.file_name().and_then(|name| name.to_str()).is_none() {
+        return Err("保存路径缺少文件名".to_string());
+    }
+    Ok(())
 }
 
-/// Tauri 命令：把文本内容写入系统下载目录，返回完整路径
+/// Tauri 命令：把文本内容写入用户选定的路径，返回完整路径
 ///
-/// 用于导出测试结果（CSV）。仅接受纯文件名：包含路径分隔符或上跳片段的
-/// 名字一律拒绝，避免被利用做任意路径写入。
+/// 用于导出测试结果（CSV）。路径由前端调用系统保存对话框得到，
+/// 用户可在弹窗中修改目录与文件名；本命令只负责校验与落盘。
 #[tauri::command]
-fn save_text_file(
-    app: tauri::AppHandle,
-    filename: String,
-    content: String,
-) -> Result<String, String> {
-    if !is_safe_export_filename(&filename) {
-        return Err("文件名不合法".to_string());
+fn save_text_file(path: String, content: String) -> Result<String, String> {
+    let path = PathBuf::from(path);
+    validate_export_path(&path)?;
+
+    // 保存对话框一般已创建好目录，这里兼容用户手动输入的新目录
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
     }
-
-    let dir = app
-        .path()
-        .download_dir()
-        .map_err(|e| format!("无法定位下载目录: {e}"))?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建下载目录失败: {e}"))?;
-
-    let path = dir.join(&filename);
     std::fs::write(&path, content).map_err(|e| format!("写入文件失败: {e}"))?;
     Ok(path.display().to_string())
 }
@@ -334,6 +334,8 @@ pub fn run() {
         // 打开链接/目录插件：只在 Rust 侧调用，关闭对 <a target=_blank> 的 JS 注入
         // （前端不使用该插件的 JS API，因此无需额外的 capability 权限）
         .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
+        // 保存对话框插件：导出 CSV 时由用户在弹窗中确认目录与文件名
+        .plugin(tauri_plugin_dialog::init())
         // 注册取消注册表（按 window_id 管理 CancellationToken）
         .manage(cancel::CancelRegistry::new())
         .invoke_handler(tauri::generate_handler![
@@ -420,13 +422,12 @@ pub fn run() {
 mod tests {
     use super::*;
 
-    /// 导出文件名只允许纯文件名，任何路径片段都必须被拒绝
+    /// 导出路径校验：相对路径、目录、缺少文件名都必须拒绝
     #[test]
-    fn test_export_filename_validation() {
-        assert!(is_safe_export_filename("llmperf-20261024-153000.csv"));
-        assert!(!is_safe_export_filename(""));
-        assert!(!is_safe_export_filename("../evil.csv"));
-        assert!(!is_safe_export_filename("a/b.csv"));
-        assert!(!is_safe_export_filename("a\\b.csv"));
+    fn test_export_path_validation() {
+        assert!(validate_export_path(Path::new("/tmp/llmperf-20261024-153000.csv")).is_ok());
+        assert!(validate_export_path(Path::new("llmperf-20261024-153000.csv")).is_err());
+        assert!(validate_export_path(Path::new("/tmp")).is_err());
+        assert!(validate_export_path(Path::new("/")).is_err());
     }
 }

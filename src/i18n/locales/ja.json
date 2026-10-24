@@ -103,6 +103,10 @@
     "exported": "{0} に保存しました",
     "exportFailed": "エクスポート失敗: {0}"
   },
+  "export": {
+    "saveTitle": "エクスポート先を保存",
+    "csvFilter": "CSV ファイル"
+  },
   "mode": {
     "chat": "チャットモード",
     "sweep": "並行数スイープ"
