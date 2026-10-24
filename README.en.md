@@ -59,7 +59,13 @@ The app uses the native menu bar (a global menu bar on macOS, and the window-top
 | Toggle fullscreen | `F11` |
 | Reload interface / developer tools (dev builds only) | `Ctrl / Cmd + R` / `F12` |
 
-Menu items follow the UI state: while a request is in flight, Send / Start sweep are grayed out and only Cancel all / Stop sweep remain clickable; export items stay disabled until there is a result; switching modes and clearing are blocked during a sweep. The **Help → Keyboard Shortcuts** dialog is generated from the backend menu definition, so its labels follow the current language.
+Menu items follow the UI state:
+
+- **Mode isolation**: Send is only available in chat mode, while Start / Stop sweep are only available in sweep mode — the two modes render mutually exclusive UIs, so triggering one from the other would “run something you cannot see”
+- **Request state**: while a request is in flight, Send / Start sweep are grayed out and only Cancel all / Stop sweep remain clickable
+- **Result state**: export items stay disabled until there is something to export, and switching modes or clearing results is blocked during a sweep
+
+The **Help → Keyboard Shortcuts** dialog is generated from the backend menu definition, so its labels follow the current language.
 
 ## 📊 Metric Definitions
 

@@ -652,13 +652,19 @@ function App() {
    */
   const menuActionsRef = useRef<Record<string, () => void>>({});
   menuActionsRef.current = {
-    "run-send": handleSend,
+    // 发送与扫描控制按模式隔离：后端已按模式置灰，这里再兜一层，
+    // 避免状态同步有延迟时在错误的模式里触发动作
+    "run-send": () => {
+      if (mode === "chat") handleSend();
+    },
     "run-cancel-all": cancelAll,
     // 清空按当前模式区分：对话模式清窗口与汇总，扫描模式清扫描结果
     "run-clear": () => (mode === "chat" ? clearAllWindows() : clearSweepResults()),
     "run-mode-chat": () => setMode("chat"),
     "run-mode-sweep": () => setMode("sweep"),
-    "run-sweep-start": runSweep,
+    "run-sweep-start": () => {
+      if (mode === "sweep") runSweep();
+    },
     "run-sweep-stop": stopSweep,
     "file-export-run": exportCsv,
     "file-export-sweep": exportSweepCsv,

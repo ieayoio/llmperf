@@ -194,11 +194,15 @@ pub struct MenuState {
 /// 由界面状态推导各菜单项的可用性（纯函数，便于单测）
 fn enabled_map(state: &MenuState) -> [(&'static str, bool); 9] {
     let busy = state.sending || state.sweep_running;
+    // 两个模式的界面元素互斥渲染：对话模式看不到扫描面板，反之亦然，
+    // 因此动作类菜单项也要按模式禁用，避免“跑了但看不见结果”
+    let chat = state.mode != "sweep";
     [
-        // 有请求在途时不允许重复发送，避免历史错乱
-        ("run-send", !busy),
+        // 发送只属于对话模式：扫描面板里发出去也看不到窗口输出
+        ("run-send", !busy && chat),
         ("run-cancel-all", busy),
-        ("run-sweep-start", !busy),
+        // 扫描控制只属于扫描模式：对话模式下扫描会静默跑完，结果无处展示
+        ("run-sweep-start", !busy && !chat),
         ("run-sweep-stop", state.sweep_running),
         // 扫描中不能清空：清完扫描还会继续追加快照，容易让人误判
         ("run-clear", !state.sweep_running),
@@ -696,6 +700,13 @@ mod tests {
         assert!(!value(&idle, "file-export-run"));
         assert!(!value(&idle, "file-export-sweep"));
         assert!(!value(&idle, "run-sweep-stop"));
+        // 对话模式下不能开始扫描（否则静默跑完也看不到结果）
+        assert!(!value(&idle, "run-sweep-start"));
+
+        // 模式隔离：扫描模式下不能发送，但可以开始扫描
+        let sweep_idle = MenuState { mode: "sweep".to_string(), ..idle.clone() };
+        assert!(!value(&sweep_idle, "run-send"));
+        assert!(value(&sweep_idle, "run-sweep-start"));
 
         // 对话发送中：只能取消，且不能切到扫描模式
         let sending = MenuState { sending: true, ..idle.clone() };
