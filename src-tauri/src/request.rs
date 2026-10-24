@@ -1,5 +1,5 @@
 use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent, FinishInfo, Timings};
-use crate::types::{LLMRequestConfig, SingleResult, StreamChunkEvent};
+use crate::types::{ItlStats, LLMRequestConfig, SingleResult, StreamChunkEvent};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use tauri::Emitter;
@@ -24,6 +24,62 @@ const DEFAULT_TIMEOUT_SECS: u64 = 600;
 /// 阶段时长过短时（例如所有 token 在一个 chunk 里一次性到达），
 /// `tokens / duration` 会被放大成毫无参考价值的天文数字，直接视为无数据。
 const MIN_PHASE_DURATION_MS: u128 = 10;
+
+/// 单个请求保留的增量时间戳上限
+///
+/// 正常流式输出在数百到数千个分片量级，留出充足余量；
+/// 达到上限后不再记录新样本（已记录部分仍可统计），避免异常长的流撑爆内存。
+const MAX_ITL_SAMPLES: usize = 8192;
+
+/// 记录一个增量到达时刻（达到上限后停止记录）
+fn record_delta(samples: &mut Vec<u128>, at_ms: u128) {
+    if samples.len() < MAX_ITL_SAMPLES {
+        samples.push(at_ms);
+    }
+}
+
+/// 分位数（线性插值，与 numpy.percentile / 前端统计口径一致）
+fn percentile(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let idx = (sorted.len() - 1) as f64 * p;
+    let lo = idx.floor() as usize;
+    let hi = idx.ceil() as usize;
+    sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo as f64)
+}
+
+/// 由增量到达时刻计算平均分片间隔（TPOT）与 ITL 分位数
+///
+/// - `tpot_ms`：相邻增量间隔的均值，与 TPOT（Time Per Output Token）同义；
+///   服务端一个分片只含一个 token 时它就是真正的 TPOT。
+/// - `itl`：间隔的 p50/p95/max，用来发现“先快后卡”的抖动。
+///
+/// 增量少于 2 个时无法形成间隔，两者返回 None。间隔为 0 的样本会被保留：
+/// 同一毫秒内到达多个分片是真实的服务端行为，剔除会让 p50 虚高。
+pub(crate) fn calc_itl_stats(delta_at_ms: &[u128]) -> (Option<f64>, Option<ItlStats>) {
+    if delta_at_ms.len() < 2 {
+        return (None, None);
+    }
+
+    let mut gaps: Vec<f64> = delta_at_ms
+        .windows(2)
+        .map(|w| w[1].saturating_sub(w[0]) as f64)
+        .collect();
+    let tpot = gaps.iter().sum::<f64>() / gaps.len() as f64;
+
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let itl = ItlStats {
+        p50_ms: percentile(&gaps, 0.5),
+        p95_ms: percentile(&gaps, 0.95),
+        max_ms: *gaps.last().unwrap_or(&0.0),
+    };
+
+    (Some(tpot), Some(itl))
+}
 
 // ============================ 客户端缓存 ============================
 
@@ -154,133 +210,144 @@ pub(crate) fn calc_tokens_per_second(
     (completion_tps, prompt_tps)
 }
 
-/// 发送错误事件到前端
-fn emit_error(app: &tauri::AppHandle, window_id: usize, duration_ms: u128, error: String) {
-    let _ = app.emit("stream_chunk", StreamChunkEvent {
-        target_window_id: window_id,
-        content: String::new(),
-        reasoning_content: None,
-        finished: true,
-        error: Some(error),
-        duration_ms,
-        ttft_ms: None,
-        completion_tokens_per_second: None,
-        prompt_tokens_per_second: None,
-        canceled: false,
-    });
+/// 流式事件发射器
+///
+/// 封装 `silent` 开关：静默模式（并发梯度扫描）下不推送任何 `stream_chunk` 事件，
+/// 结果仅通过命令返回值回传。否则几十路并发逐 token 推送会让 webview 频繁重渲染，
+/// 既拖慢界面，也会污染压测计时。
+struct EventSink {
+    app: tauri::AppHandle,
+    window_id: usize,
+    silent: bool,
 }
 
-/// 发送正文流式 chunk 到前端
-fn emit_chunk(
-    app: &tauri::AppHandle,
-    window_id: usize,
-    start: std::time::Instant,
-    chunk: &str,
-) {
-    let _ = app.emit("stream_chunk", StreamChunkEvent {
-        target_window_id: window_id,
-        content: chunk.to_string(),
-        reasoning_content: None,
-        finished: false,
-        error: None,
-        duration_ms: start.elapsed().as_millis(),
-        ttft_ms: None,
-        completion_tokens_per_second: None,
-        prompt_tokens_per_second: None,
-        canceled: false,
-    });
+impl EventSink {
+    fn new(app: tauri::AppHandle, window_id: usize, silent: bool) -> Self {
+        Self {
+            app,
+            window_id,
+            silent,
+        }
+    }
+
+    /// 统一出口：静默模式直接丢弃
+    fn emit(&self, event: StreamChunkEvent) {
+        if self.silent {
+            return;
+        }
+        let _ = self.app.emit("stream_chunk", event);
+    }
+
+    /// 事件模板：只填公共字段，调用方再用结构体更新语法覆盖差异字段
+    fn template(&self, finished: bool, duration_ms: u128) -> StreamChunkEvent {
+        StreamChunkEvent {
+            target_window_id: self.window_id,
+            content: String::new(),
+            reasoning_content: None,
+            finished,
+            error: None,
+            duration_ms,
+            ttft_ms: None,
+            first_content_ms: None,
+            tpot_ms: None,
+            itl: None,
+            completion_tokens_per_second: None,
+            prompt_tokens_per_second: None,
+            canceled: false,
+        }
+    }
+
+    /// 错误完成事件
+    fn error(&self, duration_ms: u128, error: String) {
+        self.emit(StreamChunkEvent {
+            error: Some(error),
+            ..self.template(true, duration_ms)
+        });
+    }
+
+    /// 正文流式增量
+    fn chunk(&self, start: std::time::Instant, chunk: &str) {
+        self.emit(StreamChunkEvent {
+            content: chunk.to_string(),
+            ..self.template(false, start.elapsed().as_millis())
+        });
+    }
+
+    /// 思考内容流式增量
+    fn reasoning(&self, start: std::time::Instant, chunk: &str) {
+        self.emit(StreamChunkEvent {
+            reasoning_content: Some(chunk.to_string()),
+            ..self.template(false, start.elapsed().as_millis())
+        });
+    }
+
+    /// 成功完成事件：携带全部延迟指标
+    fn finished(&self, metrics: &LatencyMetrics) {
+        self.emit(StreamChunkEvent {
+            ttft_ms: metrics.ttft_ms,
+            first_content_ms: metrics.first_content_ms,
+            tpot_ms: metrics.tpot_ms,
+            itl: metrics.itl,
+            completion_tokens_per_second: metrics.completion_tps,
+            prompt_tokens_per_second: metrics.prompt_tps,
+            ..self.template(true, metrics.duration_ms)
+        });
+    }
+
+    /// 用户取消事件：复用 finished 通道，前端走现有 error 分支
+    fn canceled(&self, metrics: &LatencyMetrics) {
+        self.emit(StreamChunkEvent {
+            // 用统一的"用户已取消"文案，便于前端展示
+            error: Some(CANCELED_MESSAGE.to_string()),
+            // 结构化标记：前端据这个字段设置取消态，不依赖 error 文案
+            canceled: true,
+            ..self.template(true, metrics.duration_ms)
+        });
+    }
 }
 
-/// 发送思考内容流式 chunk 到前端
-fn emit_reasoning_chunk(
-    app: &tauri::AppHandle,
-    window_id: usize,
-    start: std::time::Instant,
-    chunk: &str,
-) {
-    let _ = app.emit("stream_chunk", StreamChunkEvent {
-        target_window_id: window_id,
-        content: String::new(),
-        reasoning_content: Some(chunk.to_string()),
-        finished: false,
-        error: None,
-        duration_ms: start.elapsed().as_millis(),
-        ttft_ms: None,
-        completion_tokens_per_second: None,
-        prompt_tokens_per_second: None,
-        canceled: false,
-    });
-}
-
-/// 发送成功完成事件到前端
-fn emit_finished(
-    app: &tauri::AppHandle,
-    window_id: usize,
+/// 单次请求的延迟指标集合
+///
+/// 统一在流结束时算好，再分别用于推送完成事件与构造命令返回值，
+/// 避免两处各算一遍导致数值不一致。
+#[derive(Default, Clone, Copy)]
+struct LatencyMetrics {
     duration_ms: u128,
     ttft_ms: Option<u128>,
+    first_content_ms: Option<u128>,
+    tpot_ms: Option<f64>,
+    itl: Option<ItlStats>,
     completion_tps: Option<f64>,
     prompt_tps: Option<f64>,
-) {
-    let _ = app.emit("stream_chunk", StreamChunkEvent {
-        target_window_id: window_id,
-        content: String::new(),
-        reasoning_content: None,
-        finished: true,
-        error: None,
-        duration_ms,
-        ttft_ms,
-        completion_tokens_per_second: completion_tps,
-        prompt_tokens_per_second: prompt_tps,
-        canceled: false,
-    });
 }
 
-/// 发送"用户取消"完成事件：复用 finished 通道，前端走现有 error 分支
-fn emit_canceled(
-    app: &tauri::AppHandle,
+/// 构造最终返回结果：统一填字段，避免每个分支各写一遍十几个字段
+fn build_result(
     window_id: usize,
-    start: std::time::Instant,
-) {
-    let _ = app.emit("stream_chunk", StreamChunkEvent {
-        target_window_id: window_id,
-        content: String::new(),
-        reasoning_content: None,
-        finished: true,
-        // 用统一的"用户已取消"文案，便于前端展示
-        error: Some(CANCELED_MESSAGE.to_string()),
-        duration_ms: start.elapsed().as_millis(),
-        ttft_ms: None,
-        completion_tokens_per_second: None,
-        prompt_tokens_per_second: None,
-        // 结构化标记：前端据这个字段设置取消态，不依赖 error 文案
-        canceled: true,
-    });
-}
-
-/// 构造"用户已取消"的统一返回值
-///
-/// 取消事件已由 [`emit_canceled`] 发出，这里保证返回值与事件语义一致，
-/// 并保留已累积的部分内容。
-fn canceled_result(
-    window_id: usize,
-    duration_ms: u128,
-    ttft_ms: Option<u128>,
+    metrics: &LatencyMetrics,
     assistant_content: String,
     reasoning_content: String,
+    canceled: bool,
+    error: Option<String>,
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
 ) -> SingleResult {
     SingleResult {
         window_id,
         assistant_content,
-        duration_ms,
-        ttft_ms,
-        // 取消时 usage 通常不完整，不输出 token 数，避免汇总时被低估
-        prompt_tokens: None,
-        completion_tokens: None,
-        completion_tokens_per_second: None,
-        prompt_tokens_per_second: None,
-        canceled: true,
-        error: Some(CANCELED_MESSAGE.to_string()),
-        reasoning_content: Some(reasoning_content),
+        // 空思考内容不写入，避免前端把空串当成"有推理链"
+        reasoning_content: (!reasoning_content.is_empty()).then_some(reasoning_content),
+        duration_ms: metrics.duration_ms,
+        ttft_ms: metrics.ttft_ms,
+        first_content_ms: metrics.first_content_ms,
+        tpot_ms: metrics.tpot_ms,
+        itl: metrics.itl,
+        prompt_tokens,
+        completion_tokens,
+        completion_tokens_per_second: metrics.completion_tps,
+        prompt_tokens_per_second: metrics.prompt_tps,
+        canceled,
+        error,
     }
 }
 
@@ -347,6 +414,10 @@ fn convert_messages(messages: &[crate::types::ChatMessage]) -> Vec<ChatMessage> 
 /// 在事件循环中同时监听 `rx.recv()` 与 `cancel_token.cancelled()`：
 /// - 若收到取消信号，立刻 break 循环并发出 `finished + 用户已取消` 事件
 /// - 已累积的正文/思考内容会保留在 `accumulated_*` 字段，前端可以读到部分输出
+///
+/// ## 静默模式
+/// `config.silent = true` 时不推送任何流式事件（包括完成/错误事件），
+/// 调用方只能从返回值拿到结果。梯度扫描就是靠这个模式避免几十路并发刷爆前端。
 pub async fn execute_stream_request(
     app: tauri::AppHandle,
     window_id: usize,
@@ -354,6 +425,8 @@ pub async fn execute_stream_request(
     cancel_token: CancellationToken,
 ) -> SingleResult {
     let start = std::time::Instant::now();
+    // 事件出口：集中控制静默开关
+    let sink = EventSink::new(app, window_id, config.silent);
 
     // 1. 构建 LlmClient 客户端配置
     let client_config = ClientConfig {
@@ -367,20 +440,21 @@ pub async fn execute_stream_request(
         Ok(c) => c,
         Err(e) => {
             let error_msg = format!("客户端初始化失败: {e}");
-            emit_error(&app, window_id, start.elapsed().as_millis(), error_msg.clone());
-            return SingleResult {
-                window_id,
-                assistant_content: String::new(),
-                reasoning_content: None,
+            let metrics = LatencyMetrics {
                 duration_ms: start.elapsed().as_millis(),
-                ttft_ms: None,
-                prompt_tokens: None,
-                completion_tokens: None,
-                completion_tokens_per_second: None,
-                prompt_tokens_per_second: None,
-                canceled: false,
-                error: Some(error_msg),
+                ..Default::default()
             };
+            sink.error(metrics.duration_ms, error_msg.clone());
+            return build_result(
+                window_id,
+                &metrics,
+                String::new(),
+                String::new(),
+                false,
+                Some(error_msg),
+                None,
+                None,
+            );
         }
     };
 
@@ -402,14 +476,21 @@ pub async fn execute_stream_request(
     let request_result = tokio::select! {
         biased;
         _ = cancel_token.cancelled() => {
-            // 建连阶段就收到取消：SSE 流尚未建立，没有已累积内容
-            emit_canceled(&app, window_id, start);
-            return canceled_result(
+            // 建连阶段就收到取消：SSE 流尚未建立，没有任何延迟指标
+            let metrics = LatencyMetrics {
+                duration_ms: start.elapsed().as_millis(),
+                ..Default::default()
+            };
+            sink.canceled(&metrics);
+            return build_result(
                 window_id,
-                start.elapsed().as_millis(),
+                &metrics,
+                String::new(),
+                String::new(),
+                true,
+                Some(CANCELED_MESSAGE.to_string()),
                 None,
-                String::new(),
-                String::new(),
+                None,
             );
         }
         result = client.chat_stream(messages, &params) => result,
@@ -419,20 +500,21 @@ pub async fn execute_stream_request(
         Ok(rx) => rx,
         Err(e) => {
             let error_msg = format!("流式请求发送失败: {e}");
-            emit_error(&app, window_id, start.elapsed().as_millis(), error_msg.clone());
-            return SingleResult {
-                window_id,
-                assistant_content: String::new(),
-                reasoning_content: None,
+            let metrics = LatencyMetrics {
                 duration_ms: start.elapsed().as_millis(),
-                ttft_ms: None,
-                prompt_tokens: None,
-                completion_tokens: None,
-                completion_tokens_per_second: None,
-                prompt_tokens_per_second: None,
-                canceled: false,
-                error: Some(error_msg),
+                ..Default::default()
             };
+            sink.error(metrics.duration_ms, error_msg.clone());
+            return build_result(
+                window_id,
+                &metrics,
+                String::new(),
+                String::new(),
+                false,
+                Some(error_msg),
+                None,
+                None,
+            );
         }
     };
 
@@ -444,6 +526,10 @@ pub async fn execute_stream_request(
     // 首个增量（思考或正文）在消费端记录的时间（毫秒）
     // 仅作为 SSE 解析层时间戳缺失时的兜底（例如流异常中断、未收到 Finish 事件）
     let mut first_token_at_ms: Option<u128> = None;
+    // 首个正文增量到达时刻：推理模型会先思考很久，这个值才是用户看到答案的延迟
+    let mut first_content_ms: Option<u128> = None;
+    // 每个增量（思考或正文）的到达时刻，用于事后计算 TPOT / ITL
+    let mut delta_at_ms: Vec<u128> = Vec::new();
     // 是否被用户主动取消
     let mut canceled = false;
 
@@ -460,21 +546,29 @@ pub async fn execute_stream_request(
                     Some(Ok(event)) => match event {
                         StreamEvent::ReasoningDelta(s) => {
                             if !s.is_empty() {
+                                let at_ms = start.elapsed().as_millis();
+                                record_delta(&mut delta_at_ms, at_ms);
                                 // 首个增量可能是思考内容：它同样是 prefill 结束的标志
                                 if first_token_at_ms.is_none() {
-                                    first_token_at_ms = Some(start.elapsed().as_millis());
+                                    first_token_at_ms = Some(at_ms);
                                 }
                                 accumulated_reasoning.push_str(&s);
-                                emit_reasoning_chunk(&app, window_id, start, &s);
+                                sink.reasoning(start, &s);
                             }
                         }
                         StreamEvent::ContentDelta(s) => {
                             if !s.is_empty() {
+                                let at_ms = start.elapsed().as_millis();
+                                record_delta(&mut delta_at_ms, at_ms);
                                 if first_token_at_ms.is_none() {
-                                    first_token_at_ms = Some(start.elapsed().as_millis());
+                                    first_token_at_ms = Some(at_ms);
+                                }
+                                // 正文首字单独记录：与 TTFT 分开，才能看出“思考占了多久”
+                                if first_content_ms.is_none() {
+                                    first_content_ms = Some(at_ms);
                                 }
                                 accumulated_content.push_str(&s);
-                                emit_chunk(&app, window_id, start, &s);
+                                sink.chunk(start, &s);
                             }
                         }
                         // 按字段合并：usage 与 timings 可能分散在不同 chunk 中到达
@@ -490,8 +584,8 @@ pub async fn execute_stream_request(
         }
     }
 
-    // 7. 计算 token 速度
-    //    优先使用 timings（vLLM 等 API 在流末尾提供），其次退化到 usage + 时间戳反推
+    // 7. 计算各项指标
+    //    token 速度：优先用 timings（vLLM 等 API 在流末尾提供），其次退化到 usage + 时间戳反推
     let total_duration_ms = start.elapsed().as_millis();
     // prefill 锚点：优先用 SSE 解析层打点的首 token 时刻（更接近字节真实到达），
     // 解析层拿不到时（例如流被截断、没有 Finish 事件）退回消费端记录的时刻
@@ -506,6 +600,8 @@ pub async fn execute_stream_request(
         total_duration_ms,
         prefill_at_ms,
     );
+    // 流式平滑度：以增量到达时刻统计分片间隔（含思考分片，与 TTFT 口径保持一致）
+    let (tpot_ms, itl) = calc_itl_stats(&delta_at_ms);
 
     // 从 usage 提取 token 数：0 视为服务端未提供，避免汇总时被无意义地拉低
     let usage_ref = finish_info.as_ref().and_then(|i| i.usage.as_ref());
@@ -513,21 +609,44 @@ pub async fn execute_stream_request(
     let completion_tokens =
         usage_ref.and_then(|u| (u.completion_tokens > 0).then_some(u.completion_tokens));
 
-    // 调试日志：打印 token 速度计算结果
+    let metrics = LatencyMetrics {
+        duration_ms: total_duration_ms,
+        ttft_ms: prefill_at_ms,
+        first_content_ms,
+        tpot_ms,
+        itl,
+        completion_tps,
+        prompt_tps,
+    };
+    // 取消 / 出错时样本不完整：速度与间隔统计一律不输出，避免污染汇总。
+    // 首字类指标仍然有效，保留下来便于定位“首字慢”类问题。
+    let partial_metrics = LatencyMetrics {
+        completion_tps: None,
+        prompt_tps: None,
+        tpot_ms: None,
+        itl: None,
+        ..metrics
+    };
+
+    // 调试日志：打印本次请求的关键指标
     eprintln!(
-        "[llmperf] window={window_id} total_ms={} prefill_ms={:?} completion_tps={:?} prompt_tps={:?}",
-        total_duration_ms, prefill_at_ms, completion_tps, prompt_tps
+        "[llmperf] window={window_id} total_ms={} prefill_ms={:?} content_ms={:?} tpot={:?} completion_tps={:?} prompt_tps={:?}",
+        total_duration_ms, prefill_at_ms, first_content_ms, tpot_ms, completion_tps, prompt_tps
     );
 
     // 8. 取消：发送统一的"用户已取消"完成事件，不算错误
     if canceled {
-        emit_canceled(&app, window_id, start);
-        return canceled_result(
+        sink.canceled(&partial_metrics);
+        return build_result(
             window_id,
-            total_duration_ms,
-            prefill_at_ms,
+            &partial_metrics,
             accumulated_content,
             accumulated_reasoning,
+            true,
+            Some(CANCELED_MESSAGE.to_string()),
+            // 取消时 usage 通常不完整，不输出 token 数，避免汇总时被低估
+            None,
+            None,
         );
     }
 
@@ -536,48 +655,33 @@ pub async fn execute_stream_request(
     let error = last_error
         .or_else(|| finish_info.is_none().then(|| "流意外结束：未收到完成标记".to_string()));
     if let Some(err) = error {
-        emit_error(&app, window_id, total_duration_ms, err.clone());
-        return SingleResult {
+        sink.error(total_duration_ms, err.clone());
+        return build_result(
             window_id,
-            assistant_content: accumulated_content,
-            duration_ms: total_duration_ms,
-            // 首字延迟仍然有效，保留下来便于定位"首字慢"类问题
-            ttft_ms: prefill_at_ms,
+            &partial_metrics,
+            accumulated_content,
+            accumulated_reasoning,
+            false,
+            Some(err),
             prompt_tokens,
             completion_tokens,
-            // 半截数据算出的速度没有参考价值，不入库也不展示
-            completion_tokens_per_second: None,
-            prompt_tokens_per_second: None,
-            canceled: false,
-            error: Some(err),
-            reasoning_content: Some(accumulated_reasoning),
-        };
+        );
     }
 
-    // 10. 正常完成：发送携带 token 速度的完成事件
-    emit_finished(
-        &app,
-        window_id,
-        total_duration_ms,
-        prefill_at_ms,
-        completion_tps,
-        prompt_tps,
-    );
+    // 10. 正常完成：发送携带全部延迟指标的完成事件
+    sink.finished(&metrics);
 
     // 11. 返回聚合结果
-    SingleResult {
+    build_result(
         window_id,
-        assistant_content: accumulated_content,
-        duration_ms: total_duration_ms,
-        ttft_ms: prefill_at_ms,
+        &metrics,
+        accumulated_content,
+        accumulated_reasoning,
+        false,
+        None,
         prompt_tokens,
         completion_tokens,
-        completion_tokens_per_second: completion_tps,
-        prompt_tokens_per_second: prompt_tps,
-        canceled: false,
-        error: None,
-        reasoning_content: Some(accumulated_reasoning),
-    }
+    )
 }
 
 #[cfg(test)]
@@ -812,5 +916,132 @@ mod tests {
         let converted = convert_messages(&messages);
         assert_eq!(converted[1].reasoning_content.as_deref(), Some("推理链"));
         assert!(converted[0].reasoning_content.is_none(), "user 消息不携带推理链");
+    }
+
+    /// ITL 统计：等间隔分片应得到一致的均值/中位数/分位数
+    #[test]
+    fn test_calc_itl_stats_uniform_gaps() {
+        // 5 个分片，间隔 20ms → 4 个 gap，全为 20
+        let (tpot, itl) = calc_itl_stats(&[100, 120, 140, 160, 180]);
+        assert!((tpot.expect("应能算出平均间隔") - 20.0).abs() < 1e-9);
+        let itl = itl.expect("增量≥2 时应输出 ITL 统计");
+        assert!((itl.p50_ms - 20.0).abs() < 1e-9);
+        assert!((itl.p95_ms - 20.0).abs() < 1e-9);
+        assert!((itl.max_ms - 20.0).abs() < 1e-9);
+    }
+
+    /// 抖动场景：一个超长间隔必须体现在 max / P95 上，而中位数不被带偏
+    #[test]
+    fn test_calc_itl_stats_captures_stall() {
+        // gap = [10, 10, 900]
+        let (tpot, itl) = calc_itl_stats(&[0, 10, 20, 920]);
+        let itl = itl.expect("应输出 ITL 统计");
+        assert!(
+            (tpot.expect("应能算出平均间隔") - (920.0 / 3.0)).abs() < 1e-9,
+            "均值应被长间隔拉高"
+        );
+        assert!((itl.max_ms - 900.0).abs() < 1e-9);
+        assert!(itl.p95_ms > 800.0, "P95 必须能暴露长卡顿");
+        assert!(itl.p50_ms < 20.0, "中位数不应被单个长间隔带偏");
+    }
+
+    /// 少于 2 个增量无法形成间隔，必须返回 None（不要用 0 掩盖无数据）
+    #[test]
+    fn test_calc_itl_stats_needs_two_samples() {
+        assert_eq!(calc_itl_stats(&[]), (None, None));
+        assert_eq!(calc_itl_stats(&[42]), (None, None));
+    }
+
+    /// 同一毫秒到达多个分片时 gap=0，应保留而不是过滤（否则 p50 虚高）
+    #[test]
+    fn test_calc_itl_stats_keeps_zero_gaps() {
+        let (tpot, itl) = calc_itl_stats(&[5, 5, 5]);
+        assert!((tpot.expect("应能算出平均间隔") - 0.0).abs() < 1e-9);
+        assert!((itl.expect("应输出 ITL 统计").p50_ms - 0.0).abs() < 1e-9);
+    }
+
+    /// 分位数线性插值：与 numpy.percentile 默认口径一致
+    #[test]
+    fn test_percentile_linear_interpolation() {
+        let sorted = [10.0, 20.0, 30.0, 40.0];
+        assert!((percentile(&sorted, 0.0) - 10.0).abs() < 1e-9);
+        assert!((percentile(&sorted, 0.5) - 25.0).abs() < 1e-9);
+        assert!((percentile(&sorted, 1.0) - 40.0).abs() < 1e-9);
+        // (4-1)*0.95 = 2.85 → 30 + (40-30)*0.85 = 38.5
+        assert!((percentile(&sorted, 0.95) - 38.5).abs() < 1e-9);
+    }
+
+    /// 真实 API 联调：用增量到达时刻算出的 TPOT，应当与服务端 timings 反推的
+    /// 每 token 耗时（predicted_per_token_ms）在同一量级。
+    ///
+    /// 该用例默认忽略（不依赖网络的 CI 保持绿灯），需要本地测试服务时手动运行：
+    /// ```bash
+    /// LLMPERF_TEST_BASE_URL=http://127.0.0.1:16777/v1 \
+    /// LLMPERF_TEST_API_KEY=sk-xxx LLMPERF_TEST_MODEL_CHAT=testllm-nk \
+    ///   cargo test --lib -- --ignored live_itl
+    /// ```
+    #[tokio::test]
+    #[ignore = "需要真实 LLM API（环境变量注入配置）"]
+    async fn live_itl_matches_server_timings() {
+        let (Ok(base_url), Ok(api_key), Ok(model)) = (
+            std::env::var("LLMPERF_TEST_BASE_URL"),
+            std::env::var("LLMPERF_TEST_API_KEY"),
+            std::env::var("LLMPERF_TEST_MODEL_CHAT"),
+        ) else {
+            return;
+        };
+
+        let client = LlmClient::new(ClientConfig {
+            base_url,
+            api_key,
+            timeout_secs: 120,
+        })
+        .expect("客户端应能创建");
+        let params = ChatParams {
+            model,
+            max_tokens: Some(48),
+            ..Default::default()
+        };
+        let mut rx = client
+            .chat_stream(vec![ChatMessage::user("用一句话介绍你自己")], &params)
+            .await
+            .expect("流式请求应能发出");
+
+        let start = std::time::Instant::now();
+        let mut delta_at_ms: Vec<u128> = Vec::new();
+        let mut timings: Option<Timings> = None;
+        while let Some(event) = rx.recv().await {
+            match event.expect("流式事件不应报错") {
+                StreamEvent::ContentDelta(s) | StreamEvent::ReasoningDelta(s) => {
+                    if !s.is_empty() {
+                        record_delta(&mut delta_at_ms, start.elapsed().as_millis());
+                    }
+                }
+                StreamEvent::Finish(info) => {
+                    if info.timings.is_some() {
+                        timings = info.timings;
+                    }
+                }
+            }
+        }
+
+        assert!(delta_at_ms.len() >= 5, "样本太少，无法验证间隔统计");
+        let (tpot, itl) = calc_itl_stats(&delta_at_ms);
+        let tpot = tpot.expect("应能算出平均分片间隔");
+        assert!(itl.is_some(), "应输出 ITL 分位数");
+        assert!(tpot > 0.0, "平均间隔必须为正数");
+
+        // 服务端 timings 是权威值，两边口径不同（客户端含网络抖动），只校验量级
+        if let Some(per_token_ms) = timings
+            .as_ref()
+            .and_then(|t| t.completion_tokens_per_second())
+            .map(|tps| 1000.0 / tps)
+        {
+            let ratio = tpot / per_token_ms;
+            assert!(
+                (0.5..2.0).contains(&ratio),
+                "客户端 TPOT {tpot:.1}ms 与服务端 {per_token_ms:.1}ms 偏差过大（比值 {ratio:.2}）"
+            );
+        }
     }
 }

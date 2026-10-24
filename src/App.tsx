@@ -2,6 +2,20 @@ import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { initI18n, t, getCurrentLanguage, setLanguage } from "./i18n";
+import {
+  buildCsv,
+  buildExportFilename,
+  buildSweepCsv,
+  parseLevels,
+  parseOptionalNumber,
+  summarizeRun,
+  type ItlStats,
+  type RunSummary,
+  type SingleResult,
+  type Stats,
+  type SweepPoint,
+} from "./metrics";
+import { SweepPanel, type SweepProgress } from "./SweepPanel";
 import "./App.css";
 
 // 初始化国际化（从 localStorage 加载语言设置）
@@ -46,8 +60,14 @@ interface ChatWindow {
   accumulatedReasoning: string;
   /** 思考结束时间（首个正文 chunk 到达时的 duration_ms），用于计算思考耗时 */
   reasoningEndTime?: number;
-  /** 首 token 延迟（毫秒） */
+  /** 首 token（思考或正文）延迟（毫秒） */
   ttft?: number;
+  /** 正文首字延迟（毫秒）：推理模型下明显大于 ttft */
+  firstContent?: number;
+  /** 平均分片间隔（毫秒/分片），近似 TPOT */
+  tpot?: number;
+  /** 分片间隔 P95（毫秒），用于看抖动 */
+  itlP95?: number;
 }
 
 /** 流式 chunk 事件 */
@@ -62,6 +82,12 @@ interface StreamChunkPayload {
   duration_ms: number;
   /** 首 token 延迟（毫秒），仅完成事件携带 */
   ttft_ms?: number | null;
+  /** 正文首字延迟（毫秒），仅完成事件携带 */
+  first_content_ms?: number | null;
+  /** 平均分片间隔（毫秒/分片），仅完成事件携带 */
+  tpot_ms?: number | null;
+  /** 分片间隔分位数统计，仅完成事件携带 */
+  itl?: ItlStats | null;
   /** 是否被用户主动取消（后端结构化字段，不依赖 error 文案） */
   canceled?: boolean;
   /** 补全阶段 token 速度（每秒 token 数，无数据时为 null） */
@@ -70,161 +96,16 @@ interface StreamChunkPayload {
   prompt_tokens_per_second?: number | null;
 }
 
-/** 后端 `SingleResult`（Rust 字段名原样序列化，故为 snake_case） */
-interface SingleResult {
-  window_id: number;
-  duration_ms: number;
-  /** 首 token 延迟（毫秒），收到首个增量前失败时缺失 */
-  ttft_ms?: number;
-  prompt_tokens?: number;
-  completion_tokens?: number;
-  completion_tokens_per_second?: number;
-  prompt_tokens_per_second?: number;
-  /** 是否被用户主动取消 */
-  canceled?: boolean;
-  error: string | null;
-}
+/** 梯度扫描保留的最大并发档位数（与 parseLevels 的上限保持一致） */
+const MAX_SWEEP_LEVELS = 8;
 
-/** 一组数值的统计量（无有效数据时各字段缺失） */
-interface Stats {
-  avg?: number;
-  min?: number;
-  max?: number;
-  p50?: number;
-  p95?: number;
-}
-
-/** 一轮并发测试的汇总结果 */
-interface RunSummary {
-  concurrency: number;
-  /** 从发起请求到全部窗口结束的墙钟时间（毫秒） */
-  wallClockMs: number;
-  success: number;
-  failed: number;
-  canceled: number;
-  totalCompletionTokens: number;
-  /** 整体吞吐：本轮总 completion token / 墙钟秒数 */
-  throughput?: number;
-  ttft: Stats;
-  duration: Stats;
-  completionTps: Stats;
-  /** 逐窗口明细，供导出 CSV 使用 */
-  results: SingleResult[];
-}
-
-/** 线性插值百分位：与 numpy.percentile 默认口径一致 */
-function percentileOfSorted(sorted: number[], p: number): number {
-  if (sorted.length === 1) return sorted[0];
-  const idx = (sorted.length - 1) * p;
-  const lo = Math.floor(idx);
-  const hi = Math.ceil(idx);
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
-}
-
-/** 计算一组数值的均值、最小/最大与 P50/P95；空数组返回空对象 */
-function computeStats(values: number[]): Stats {
-  if (values.length === 0) return {};
-  const sorted = [...values].sort((a, b) => a - b);
-  return {
-    avg: sorted.reduce((sum, v) => sum + v, 0) / sorted.length,
-    min: sorted[0],
-    max: sorted[sorted.length - 1],
-    p50: percentileOfSorted(sorted, 0.5),
-    p95: percentileOfSorted(sorted, 0.95),
-  };
-}
-
-/** 把逐窗口结果聚合成一轮的汇总统计 */
-function summarizeRun(results: SingleResult[], wallClockMs: number): RunSummary {
-  const canceled = results.filter((r) => r.canceled === true).length;
-  const failed = results.filter((r) => r.canceled !== true && r.error).length;
-  // 只统计成功且有数值的样本，避免失败/取消把均值带偏
-  const succeeded = results.filter((r) => !r.error && r.canceled !== true);
-  const samples = (pick: (r: SingleResult) => number | undefined) =>
-    succeeded
-      .map(pick)
-      .filter((v): v is number => typeof v === "number" && v > 0);
-
-  const totalCompletionTokens = results.reduce(
-    (sum, r) => sum + (r.completion_tokens ?? 0),
-    0
-  );
-
-  return {
-    concurrency: results.length,
-    wallClockMs,
-    success: results.length - failed - canceled,
-    failed,
-    canceled,
-    totalCompletionTokens,
-    throughput:
-      wallClockMs > 0 && totalCompletionTokens > 0
-        ? totalCompletionTokens / (wallClockMs / 1000)
-        : undefined,
-    ttft: computeStats(samples((r) => r.ttft_ms)),
-    duration: computeStats(samples((r) => r.duration_ms)),
-    completionTps: computeStats(samples((r) => r.completion_tokens_per_second)),
-    results,
-  };
-}
-
-/** CSV 字段转义：含逗号、引号或换行时用双引号包裹 */
-function csvCell(value: string | number | undefined | null): string {
-  if (value === undefined || value === null) return "";
-  const text = String(value);
-  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-/** 生成逐窗口明细 CSV（表头固定英文，便于在 Excel / 脚本中复用） */
-function buildCsv(results: SingleResult[]): string {
-  const header = [
-    "window",
-    "status",
-    "ttft_ms",
-    "duration_ms",
-    "prompt_tokens",
-    "completion_tokens",
-    "completion_tps",
-    "prompt_tps",
-    "error",
-  ].join(",");
-
-  const rows = results.map((r) =>
-    [
-      r.window_id + 1,
-      // 取消优先判定，避免依赖 error 文案是否保留
-      r.canceled ? "canceled" : r.error ? "error" : "ok",
-      r.ttft_ms ?? "",
-      r.duration_ms,
-      r.prompt_tokens ?? "",
-      r.completion_tokens ?? "",
-      r.completion_tokens_per_second?.toFixed(2) ?? "",
-      r.prompt_tokens_per_second?.toFixed(2) ?? "",
-      r.error ?? "",
-    ]
-      .map(csvCell)
-      .join(",")
-  );
-
-  return [header, ...rows].join("\n");
-}
-
-/** 导出文件名：llmperf-YYYYMMDD-HHmmss.csv */
-function buildExportFilename(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
-  const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  return `llmperf-${date}-${time}.csv`;
-}
-
-/** 解析可选数字输入：空串或非法值返回 null（交由后端使用服务端默认值） */
-function parseOptionalNumber(raw: string): number | null {
-  const text = raw.trim();
-  if (text === "") return null;
-  const value = Number(text);
-  return Number.isFinite(value) ? value : null;
-}
+/**
+ * 扫描模式使用的 window_id 基址
+ *
+ * 与对话窗口（0 起）隔离，避免互相覆盖后端取消注册表里的 token，
+ * 也让「全部取消」能同时覆盖两边的请求。
+ */
+const SWEEP_WINDOW_BASE = 100_000;
 
 function App() {
   const [baseURL, setBaseURL] = useState("http://127.0.0.1:16777/v1");
@@ -242,6 +123,26 @@ function App() {
   const [lastRun, setLastRun] = useState<RunSummary | null>(null);
   // 导出提示：成功时为文件路径，失败时为错误原因
   const [exportHint, setExportHint] = useState("");
+
+  // ====== 梯度扫描状态 ======
+  // 模式：对话（逐窗口看流式输出）/ 扫描（静默逐档施压，只看指标）
+  const [mode, setMode] = useState<"chat" | "sweep">("chat");
+  // 并发梯度（逗号分隔）与每档轮次
+  const [sweepLevels, setSweepLevels] = useState("1,2,4,8,16");
+  const [sweepRounds, setSweepRounds] = useState(1);
+  // 已完成的档位结果（逐档追加，扫描中也能实时看图）
+  const [sweepPoints, setSweepPoints] = useState<SweepPoint[]>([]);
+  const [sweepRunning, setSweepRunning] = useState(false);
+  const [sweepProgress, setSweepProgress] = useState<SweepProgress | null>(null);
+  const [sweepError, setSweepError] = useState("");
+  const [sweepExportHint, setSweepExportHint] = useState("");
+  /**
+   * 停止标记
+   *
+   * 仅靠“全部取消”不够：已完成的请求不会变成 canceled，
+   * 若只看结果状态就无法判断用户是否按下了停止，扫描会继续跑完剩下的档位。
+   */
+  const sweepStopRef = useRef(false);
 
   // 当前语言状态（用于触发 UI 重新渲染）
   const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
@@ -349,8 +250,11 @@ function App() {
                 : ("done" as const),
               error: payload.error || undefined,
               duration: payload.duration_ms,
-              // 取消时清空 token 速度与首字延迟，避免显示误导性数字
+              // 取消时清空 token 速度与各项延迟，避免显示误导性数字
               ttft: isCanceled ? undefined : payload.ttft_ms ?? undefined,
+              firstContent: isCanceled ? undefined : payload.first_content_ms ?? undefined,
+              tpot: isCanceled ? undefined : payload.tpot_ms ?? undefined,
+              itlP95: isCanceled ? undefined : payload.itl?.p95_ms ?? undefined,
               completionTps: isCanceled
                 ? undefined
                 : payload.completion_tokens_per_second ?? undefined,
@@ -423,6 +327,8 @@ function App() {
     // 防重复提交：上一轮流式尚未结束时（按钮/回车都可能触发）直接忽略。
     // 否则会重复追加 user 消息，并让后端覆盖注册导致上一轮被取消、半截内容写进历史。
     if (windowsRef.current.some((w) => w.status === "sending")) return;
+    // 扫描进行中不接对话请求：两股负载同时压服务器会让两边数据都不可信
+    if (sweepRunning) return;
     if (!message.trim() || !baseURL.trim() || !apiKey.trim()) return;
     const userMessage = message.trim();
     // 立刻清空输入框：既避免重复提交，也避免流式结束后清掉用户新输入的内容
@@ -460,6 +366,10 @@ function App() {
               promptTps: undefined,
               // 清空上一轮的耗时，避免发送中仍显示旧值
               duration: undefined,
+              ttft: undefined,
+              firstContent: undefined,
+              tpot: undefined,
+              itlP95: undefined,
               error: undefined,
             }
           : w
@@ -520,6 +430,10 @@ function App() {
         duration: undefined,
         completionTps: undefined,
         promptTps: undefined,
+        ttft: undefined,
+        firstContent: undefined,
+        tpot: undefined,
+        itlP95: undefined,
         accumulatedContent: "",
         accumulatedReasoning: "",
         reasoningEndTime: undefined,
@@ -551,12 +465,121 @@ function App() {
     try {
       // 加 BOM，让 Excel 正确识别 UTF-8（错误信息里可能有中文）
       const path = await invoke<string>("save_text_file", {
-        filename: buildExportFilename(),
+        filename: buildExportFilename("llmperf"),
         content: "\uFEFF" + buildCsv(lastRun.results),
       });
       setExportHint(t("summary.exported", path));
     } catch (e) {
       setExportHint(t("summary.exportFailed", String(e)));
+    }
+  };
+
+  /**
+   * 执行并发梯度扫描
+   *
+   * 逐档串行：上一档全部结束后才发下一档，避免不同档位的样本互相干扰。
+   * 每路单独 invoke（concurrency=1）是为了拿到准确的完成进度，
+   * 后端配合 `silent` 不推送流式事件，结果只从返回值取。
+   */
+  const runSweep = async () => {
+    if (sweepRunning || anySending) return;
+    const levels = parseLevels(sweepLevels, MAX_SWEEP_LEVELS);
+    const userMessage = message.trim();
+    if (levels.length === 0 || !userMessage || !baseURL.trim() || !apiKey.trim()) {
+      setSweepError(t("sweep.invalidConfig"));
+      return;
+    }
+    setSweepError("");
+    setSweepExportHint("");
+    setSweepPoints([]);
+    setSweepRunning(true);
+    sweepStopRef.current = false;
+
+    const maxTokensValue = parseOptionalNumber(maxTokens);
+    const temperatureValue = parseOptionalNumber(temperature);
+    const rounds = Math.min(5, Math.max(1, Math.floor(sweepRounds) || 1));
+    const collected: SweepPoint[] = [];
+
+    try {
+      for (const level of levels) {
+        // 用户已点停止：不再进入新的档位
+        if (sweepStopRef.current) break;
+        const results: SingleResult[] = [];
+        let wallClockMs = 0;
+
+        for (let round = 0; round < rounds; round++) {
+          if (sweepStopRef.current) break;
+          setSweepProgress({
+            concurrency: level,
+            done: 0,
+            total: level,
+            round: round + 1,
+            rounds,
+          });
+          const startedAt = performance.now();
+          const jobs = Array.from({ length: level }, (_, i) =>
+            invoke<SingleResult[]>("send_concurrent_request", {
+              config: {
+                base_url: baseURL,
+                api_key: apiKey,
+                model,
+                // 扫描只看指标，不带多轮上下文，保证每档的 prompt 一致
+                messages: [{ role: "user", content: userMessage }],
+                window_id: SWEEP_WINDOW_BASE + i,
+                max_tokens:
+                  maxTokensValue === null ? null : Math.max(1, Math.round(maxTokensValue)),
+                temperature: temperatureValue,
+                // 静默模式：不推送逐 token 事件，避免几十路并发刷爆界面
+                silent: true,
+              },
+              concurrency: 1,
+            }).then((r) => {
+              setSweepProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
+              return r;
+            })
+          );
+
+          const responses = await Promise.all(jobs);
+          wallClockMs += performance.now() - startedAt;
+          responses.forEach((r) => results.push(...r));
+        }
+
+        // 被中断的档位样本不完整（墙钟时间包含了取消后的空等），不纳入结果
+        if (sweepStopRef.current) break;
+
+        collected.push({
+          concurrency: level,
+          rounds,
+          summary: summarizeRun(results, wallClockMs),
+        });
+        // 每完成一档立即刷新图表，长扫描也能看到趋势
+        setSweepPoints([...collected]);
+      }
+    } catch (e) {
+      setSweepError(t("sweep.failed", String(e)));
+    } finally {
+      setSweepRunning(false);
+      setSweepProgress(null);
+    }
+  };
+
+  /** 停止扫描：先置停止标记，再取消所有在途请求 */
+  const stopSweep = async () => {
+    sweepStopRef.current = true;
+    await cancelAll();
+  };
+
+  /** 导出梯度扫描汇总（每档一行，便于后续画图或回归对比） */
+  const exportSweepCsv = async () => {
+    if (sweepPoints.length === 0) return;
+    try {
+      const path = await invoke<string>("save_text_file", {
+        filename: buildExportFilename("llmperf-sweep"),
+        content: "\uFEFF" + buildSweepCsv(sweepPoints),
+      });
+      setSweepExportHint(t("sweep.exported", path));
+    } catch (e) {
+      setSweepExportHint(t("sweep.exportFailed", String(e)));
     }
   };
 
@@ -570,7 +593,26 @@ function App() {
 
       {/* ====== 顶部配置栏 ====== */}
       <div className="config-panel">
-        <h1 className="app-title">{t("app.title")}</h1>
+        <div className="config-header">
+          <h1 className="app-title">{t("app.title")}</h1>
+          {/* 模式切换：扫描进行中不允许切换，避免两个模式的请求状态互相干扰 */}
+          <div className="mode-switch">
+            <button
+              className={`mode-btn ${mode === "chat" ? "active" : ""}`}
+              onClick={() => setMode("chat")}
+              disabled={sweepRunning}
+            >
+              {t("mode.chat")}
+            </button>
+            <button
+              className={`mode-btn ${mode === "sweep" ? "active" : ""}`}
+              onClick={() => setMode("sweep")}
+              disabled={anySending}
+            >
+              {t("mode.sweep")}
+            </button>
+          </div>
+        </div>
 
         <div className="config-row">
           <div className="config-field">
@@ -632,124 +674,196 @@ function App() {
           </div>
         </div>
 
-        <div className="config-row">
-          <div className="config-field">
-            <label>{t("config.concurrency")}</label>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={concurrency}
-              // 将输入强制限制在 [1, 50]：空值、负数、超过 50 都会被 clamp 修正
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === "") {
-                  // 输入框为空时先置 1（允许用户清空后再输入），避免出现 0 / NaN
-                  setConcurrency(1);
-                  return;
-                }
-                const n = Number(raw);
-                if (Number.isNaN(n)) return;
-                setConcurrency(Math.min(50, Math.max(1, Math.floor(n))));
-              }}
-            />
-          </div>
+        {/* 第三行随模式切换：对话模式配置并发数，扫描模式配置并发梯度 */}
+        {mode === "chat" ? (
+          <div className="config-row">
+            <div className="config-field">
+              <label>{t("config.concurrency")}</label>
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={concurrency}
+                // 将输入强制限制在 [1, 50]：空值、负数、超过 50 都会被 clamp 修正
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === "") {
+                    // 输入框为空时先置 1（允许用户清空后再输入），避免出现 0 / NaN
+                    setConcurrency(1);
+                    return;
+                  }
+                  const n = Number(raw);
+                  if (Number.isNaN(n)) return;
+                  setConcurrency(Math.min(50, Math.max(1, Math.floor(n))));
+                }}
+              />
+            </div>
 
-          <div className="config-field flex-1">
-            <label>{t("config.sendMessage")}</label>
-            <input
-              type="text"
-              placeholder={t("config.messagePlaceholder")}
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSend();
-              }}
-            />
-          </div>
+            <MessageInput value={message} onChange={setMessage} onSubmit={handleSend} />
 
-          <div className="config-actions">
-            <button
-              className="btn btn-primary"
-              onClick={handleSend}
-              // 发送中禁用：避免重复提交造成历史错乱
-              disabled={anySending}
-            >
-              {t("config.send")}
-            </button>
-            {/* 全部取消：仅在有窗口处于 sending 时才可点击，避免无意义操作 */}
-            <button
-              className="btn btn-danger"
-              onClick={cancelAll}
-              disabled={!anySending}
-            >
-              {t("config.cancelAll")}
-            </button>
-            <button className="btn btn-secondary" onClick={clearAllWindows}>
-              {t("config.clear")}
-            </button>
+            <div className="config-actions">
+              <button
+                className="btn btn-primary"
+                onClick={handleSend}
+                // 发送中/扫描中禁用：避免重复提交造成历史错乱
+                disabled={anySending || sweepRunning}
+              >
+                {t("config.send")}
+              </button>
+              {/* 全部取消：仅在有窗口处于 sending 时才可点击，避免无意义操作 */}
+              <button
+                className="btn btn-danger"
+                onClick={cancelAll}
+                disabled={!anySending}
+              >
+                {t("config.cancelAll")}
+              </button>
+              <button className="btn btn-secondary" onClick={clearAllWindows}>
+                {t("config.clear")}
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="config-row">
+            <div className="config-field">
+              <label>{t("sweep.levels")}</label>
+              <input
+                type="text"
+                placeholder={t("sweep.levelsPlaceholder")}
+                value={sweepLevels}
+                onChange={(e) => setSweepLevels(e.target.value)}
+                disabled={sweepRunning}
+              />
+            </div>
+
+            <div className="config-field">
+              <label>{t("sweep.rounds")}</label>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={sweepRounds}
+                // 每档重复多轮可以平滑单次噪声，但轮次太多会把扫描时长拉得很长
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (!Number.isFinite(n)) return;
+                  setSweepRounds(Math.min(5, Math.max(1, Math.floor(n))));
+                }}
+                disabled={sweepRunning}
+              />
+            </div>
+
+            <MessageInput value={message} onChange={setMessage} onSubmit={runSweep} />
+
+            <div className="config-actions">
+              <button
+                className="btn btn-primary"
+                onClick={runSweep}
+                disabled={sweepRunning || anySending}
+              >
+                {t("sweep.start")}
+              </button>
+              {/* 扫描的“停止”复用全局取消，先置停止标记避免继续跑下一档 */}
+              <button
+                className="btn btn-danger"
+                onClick={stopSweep}
+                disabled={!sweepRunning}
+              >
+                {t("sweep.stop")}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => {
+                  setSweepPoints([]);
+                  setSweepError("");
+                  setSweepExportHint("");
+                }}
+                disabled={sweepRunning}
+              >
+                {t("config.clear")}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ====== 本轮汇总（仅在有结果时显示） ====== */}
-      {lastRun && (
-        <div className="summary-panel">
-          <div className="summary-header">
-            <span className="summary-title">{t("summary.title")}</span>
-            <span className="summary-meta">
-              {t("summary.success", lastRun.success, lastRun.concurrency)}
-              {lastRun.canceled > 0 ? ` · ${t("summary.canceled", lastRun.canceled)}` : ""}
-              {lastRun.failed > 0 ? ` · ${t("summary.failed", lastRun.failed)}` : ""}
-              {` · ${t("summary.wallClock", (lastRun.wallClockMs / 1000).toFixed(2))}`}
-              {lastRun.throughput !== undefined
-                ? ` · ${t("summary.throughput", lastRun.throughput.toFixed(1))}`
-                : ""}
-            </span>
-            <button className="btn btn-secondary summary-export" onClick={exportCsv}>
-              {t("summary.export")}
-            </button>
-          </div>
+      {/* ====== 结果区：对话模式看本轮汇总，扫描模式看梯度曲线 ====== */}
+      {mode === "chat"
+        ? lastRun && (
+            <div className="summary-panel">
+              <div className="summary-header">
+                <span className="summary-title">{t("summary.title")}</span>
+                <span className="summary-meta">
+                  {t("summary.success", lastRun.success, lastRun.concurrency)}
+                  {lastRun.canceled > 0 ? ` · ${t("summary.canceled", lastRun.canceled)}` : ""}
+                  {lastRun.failed > 0 ? ` · ${t("summary.failed", lastRun.failed)}` : ""}
+                  {` · ${t("summary.wallClock", (lastRun.wallClockMs / 1000).toFixed(2))}`}
+                  {lastRun.throughput !== undefined
+                    ? ` · ${t("summary.throughput", lastRun.throughput.toFixed(1))}`
+                    : ""}
+                </span>
+                <button className="btn btn-secondary summary-export" onClick={exportCsv}>
+                  {t("summary.export")}
+                </button>
+              </div>
 
-          <table className="summary-table">
-            <thead>
-              <tr>
-                <th>{t("summary.metric")}</th>
-                <th>{t("summary.avg")}</th>
-                <th>{t("summary.p50")}</th>
-                <th>{t("summary.p95")}</th>
-                <th>{t("summary.min")}</th>
-                <th>{t("summary.max")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <SummaryRow label={t("summary.ttft")} stats={lastRun.ttft} digits={0} />
-              <SummaryRow label={t("summary.duration")} stats={lastRun.duration} digits={0} />
-              <SummaryRow
-                label={t("summary.completionTps")}
-                stats={lastRun.completionTps}
-                digits={1}
-              />
-            </tbody>
-          </table>
+              <table className="summary-table">
+                <thead>
+                  <tr>
+                    <th>{t("summary.metric")}</th>
+                    <th>{t("summary.avg")}</th>
+                    <th>{t("summary.p50")}</th>
+                    <th>{t("summary.p95")}</th>
+                    <th>{t("summary.min")}</th>
+                    <th>{t("summary.max")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <SummaryRow label={t("summary.ttft")} stats={lastRun.ttft} digits={0} />
+                  {/* 正文首字：推理模型下与 TTFT 差异很大，是用户真实感知的等答案时长 */}
+                  <SummaryRow
+                    label={t("summary.firstContent")}
+                    stats={lastRun.firstContent}
+                    digits={0}
+                  />
+                  <SummaryRow label={t("summary.duration")} stats={lastRun.duration} digits={0} />
+                  <SummaryRow
+                    label={t("summary.completionTps")}
+                    stats={lastRun.completionTps}
+                    digits={1}
+                  />
+                  <SummaryRow label={t("summary.tpot")} stats={lastRun.tpot} digits={1} />
+                  <SummaryRow label={t("summary.itlP95")} stats={lastRun.itlP95} digits={1} />
+                </tbody>
+              </table>
 
-          {exportHint && <div className="summary-hint">{exportHint}</div>}
+              {exportHint && <div className="summary-hint">{exportHint}</div>}
+            </div>
+          )
+        : (
+          <SweepPanel
+            points={sweepPoints}
+            running={sweepRunning}
+            progress={sweepProgress}
+            error={sweepError}
+            exportHint={sweepExportHint}
+            onExport={exportSweepCsv}
+          />
+        )}
+
+      {/* ====== 底部聊天窗口区域（仅对话模式） ====== */}
+      {/* 1-5 个用固定列数保持紧凑；6 个以上改由 CSS 按可用宽度自适应列数 */}
+      {mode === "chat" && (
+        <div className={`chat-grid ${concurrency <= 5 ? `cols-${concurrency}` : "cols-auto"}`}>
+          {windows.map((win) => (
+            <ChatWindow
+              key={win.id}
+              window={win}
+              onCancel={() => cancelWindow(win.id)}
+            />
+          ))}
         </div>
       )}
-
-      {/* ====== 底部聊天窗口区域 ====== */}
-      {/* 1-5 个用固定列数保持紧凑；6 个以上改由 CSS 按可用宽度自适应列数 */}
-      <div
-        className={`chat-grid ${concurrency <= 5 ? `cols-${concurrency}` : "cols-auto"}`}
-      >
-        {windows.map((win) => (
-          <ChatWindow
-            key={win.id}
-            window={win}
-            onCancel={() => cancelWindow(win.id)}
-          />
-        ))}
-      </div>
 
       {/* 关于对话框：用应用内模态框，避免 Tauri 在 alert 上注入 localhost URL */}
       {showAbout && (
@@ -783,6 +897,32 @@ function App() {
   );
 }
 
+/* ====== 消息输入框（对话模式与扫描模式共用） ====== */
+function MessageInput({
+  value,
+  onChange,
+  onSubmit,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="config-field flex-1">
+      <label>{t("config.sendMessage")}</label>
+      <input
+        type="text"
+        placeholder={t("config.messagePlaceholder")}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onSubmit();
+        }}
+      />
+    </div>
+  );
+}
+
 /* ====== 汇总表格中的一行指标 ====== */
 function SummaryRow({
   label,
@@ -803,6 +943,31 @@ function SummaryRow({
       <td>{fmt(stats.min)}</td>
       <td>{fmt(stats.max)}</td>
     </tr>
+  );
+}
+
+/* ====== 单个聊天窗口的关键指标 ====== */
+function ChatMetric({
+  label,
+  value,
+  unit,
+  digits = 0,
+}: {
+  label: string;
+  value?: number;
+  unit: string;
+  digits?: number;
+}) {
+  // 无数据（取消、或服务端未返回 usage）时不渲染，避免一排「—」占位
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return null;
+  return (
+    <span className="chat-metric">
+      <span className="chat-metric-label">{label}</span>
+      <span className="chat-metric-value">
+        {value.toFixed(digits)}
+        {unit}
+      </span>
+    </span>
   );
 }
 
@@ -868,6 +1033,17 @@ function ChatWindow({
           )}
         </div>
       </div>
+
+      {/* 完成后的关键指标：每窗口独立展示，方便横向对比抖动与 TPOT */}
+      {(win.status === "done" || win.status === "error") && (
+        <div className="chat-metrics">
+          <ChatMetric label={t("metrics.ttft")} value={win.ttft} unit="ms" />
+          <ChatMetric label={t("metrics.content")} value={win.firstContent} unit="ms" />
+          <ChatMetric label="TPOT" value={win.tpot} unit="ms" digits={1} />
+          <ChatMetric label="ITL95" value={win.itlP95} unit="ms" digits={0} />
+          <ChatMetric label={t("metrics.tps")} value={win.completionTps} unit="" digits={1} />
+        </div>
+      )}
 
       <div className="chat-messages">
         {win.messages.length === 0 && win.accumulatedContent.length === 0 && win.status === "idle" && (

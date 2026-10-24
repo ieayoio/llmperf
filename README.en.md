@@ -16,6 +16,8 @@ A cross-platform desktop application based on [Tauri 2](https://tauri.app/) for 
 - **Flexible Concurrency Configuration**: Support 1~50 concurrent requests, with window count dynamically adjusting to match
 - **Multi-window Comparison**: Display all concurrent window responses in a grid layout for easy horizontal comparison
 - **Request Timing Statistics**: Each window independently records total elapsed time (milliseconds) from send to completion
+- **Fine-grained Latency Metrics**: Besides TTFT and tok/s, it also reports first-content latency (separate from TTFT for reasoning models), TPOT (average chunk interval) and ITL P50/P95/max, exposing "fast start, stalled tail" jitter
+- **Concurrency Sweep**: Ramp through steps like `1,2,4,8,16`, plot throughput / TTFT / TPOT curves plus a per-step table to locate the saturation point, and export the sweep as CSV
 - **Error Capture & Display**: Errors during streaming requests are pushed to corresponding windows in real-time
 - **Internationalization Support**: Built-in Chinese and English (zh/en) internationalization with language switching
 - **Cross-platform Support**: Based on Tauri, supporting Linux, macOS, and Windows
@@ -29,6 +31,8 @@ The main application interface is divided into two parts:
 - **Bottom Chat Window Area**: Display real-time streaming responses from each concurrent window in grid format
 
 Supports Enter key for quick message sending, and one-click clear all windows.
+
+The header offers two modes: **Chat** (watch the streaming output of every window) and **Sweep** (silently ramp the concurrency and focus on metrics and curves).
 
 ## 🛠 Tech Stack
 

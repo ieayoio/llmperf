@@ -600,3 +600,171 @@ html, body, #root {
   display: flex;
   justify-content: flex-end;
 }
+
+/* ====== 标题行 + 模式切换 ====== */
+.config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+/* 标题行内的标题不再需要自身的外边距 */
+.config-header .app-title {
+  margin-bottom: 0;
+}
+
+.mode-switch {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid #2a2a35;
+  border-radius: 8px;
+  background: #121216;
+}
+
+.mode-btn {
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #888;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.mode-btn:hover:not(:disabled) {
+  color: #ccc;
+}
+
+.mode-btn.active {
+  background: #7c3aed;
+  color: #fff;
+}
+
+.mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ====== 单窗口关键指标条 ====== */
+.chat-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 6px 12px;
+  background: #14141a;
+  border-bottom: 1px solid #23232c;
+  flex-shrink: 0;
+}
+
+/* 所有指标都无数据时（组件返回 null）不留空白 */
+.chat-metrics:empty {
+  display: none;
+}
+
+.chat-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-metric-label {
+  color: #6b7280;
+}
+
+.chat-metric-value {
+  color: #9ca3af;
+}
+
+/* ====== 梯度扫描面板 ====== */
+/* 扫描面板占据剩余空间并内部滚动：曲线 + 表格容易超过一屏 */
+.sweep-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sweep-progress {
+  margin: 4px 0 8px 0;
+}
+
+.sweep-progress-text {
+  font-size: 12px;
+  color: #f59e0b;
+  margin-bottom: 4px;
+}
+
+.sweep-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: #26262f;
+  overflow: hidden;
+}
+
+.sweep-progress-fill {
+  height: 100%;
+  background: #7c3aed;
+  transition: width 0.2s linear;
+}
+
+.sweep-error {
+  color: #fca5a5;
+}
+
+/* 三张曲线图横向排列，窗口变窄时自动换行 */
+.sweep-charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.sweep-chart {
+  flex: 1 1 280px;
+  min-width: 240px;
+  border: 1px solid #23232c;
+  border-radius: 6px;
+  padding: 6px 8px 2px 8px;
+  background: #101014;
+}
+
+.sweep-chart-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 2px;
+}
+
+.sweep-chart-unit {
+  color: #6b7280;
+  font-size: 10px;
+}
+
+.sweep-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.sweep-chart-empty {
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.sweep-table {
+  margin-top: 4px;
+}

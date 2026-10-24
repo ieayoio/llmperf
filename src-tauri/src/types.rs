@@ -1,5 +1,20 @@
 use serde::{Deserialize, Serialize};
 
+/// 流式增量间隔（ITL，Inter-Token Latency）统计
+///
+/// 统计对象是「相邻两个流式增量到达的时间差」：服务端一个 SSE 分片可能包含多个 token，
+/// 因此该指标反映的是分片粒度下的出字节奏与卡顿，而不是严格的逐 token 延迟。
+/// 它比平均 tok/s 更能暴露「先快后卡」这类抖动问题。
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
+pub struct ItlStats {
+    /// 分片间隔中位数（毫秒）
+    pub p50_ms: f64,
+    /// 分片间隔 P95（毫秒）
+    pub p95_ms: f64,
+    /// 分片间隔最大值（毫秒），用于定位偶发长卡顿
+    pub max_ms: f64,
+}
+
 /// 单个窗口的最终请求结果
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SingleResult {
@@ -14,6 +29,21 @@ pub struct SingleResult {
     /// 请求在收到任何增量前就失败时为 None。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u128>,
+    /// 正文首字延迟（毫秒）：从发起请求到首个「正文」增量到达的时间。
+    ///
+    /// 推理模型会先输出很长的思考内容，`ttft_ms` 反映的是首个思考 token，
+    /// 只有本字段才是用户真正开始看到答案的时间。无正文增量时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_content_ms: Option<u128>,
+    /// 平均分片间隔（毫秒/分片）
+    ///
+    /// 即「(末增量 - 首增量) / (增量数 - 1)」，在“一分片一 token”的服务端实现下
+    /// 等价于 TPOT（Time Per Output Token）。增量少于 2 个时为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tpot_ms: Option<f64>,
+    /// 分片间隔的分位数统计，用于衡量流式输出的平滑度
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub itl: Option<ItlStats>,
     /// Prompt token 数（来自 `usage`，无 `usage` 时为 None）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
@@ -60,6 +90,15 @@ pub struct StreamChunkEvent {
     /// 首 token 延迟（毫秒），仅在完成事件中携带
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_ms: Option<u128>,
+    /// 正文首字延迟（毫秒），仅在完成事件中携带
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_content_ms: Option<u128>,
+    /// 平均分片间隔（毫秒/分片），仅在完成事件中携带
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tpot_ms: Option<f64>,
+    /// 分片间隔分位数统计，仅在完成事件中携带
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub itl: Option<ItlStats>,
     /// 补全阶段 token 速度（每秒 token 数，无数据时为 null）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens_per_second: Option<f64>,
@@ -97,6 +136,12 @@ pub struct LLMRequestConfig {
     /// 可复现性测试建议设为 0。
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// 静默模式：不向前端推送任何 `stream_chunk` 事件，结果仅通过命令返回值回传
+    ///
+    /// 并发梯度扫描时同时会有几十路请求，逐 token 推送会让 webview 频繁重渲染，
+    /// 既拖慢 UI 也影响压测时的计时精度，因此扫描模式必须走静默通道。
+    #[serde(default)]
+    pub silent: bool,
 }
 
 /// 单条聊天消息
@@ -123,6 +168,13 @@ mod tests {
             reasoning_content: None,
             duration_ms: 1200,
             ttft_ms: Some(320),
+            first_content_ms: Some(400),
+            tpot_ms: Some(18.5),
+            itl: Some(ItlStats {
+                p50_ms: 17.0,
+                p95_ms: 31.0,
+                max_ms: 42.0,
+            }),
             prompt_tokens: Some(10),
             completion_tokens: Some(50),
             completion_tokens_per_second: Some(41.6),
@@ -137,11 +189,28 @@ mod tests {
     fn test_single_result_serializes_snake_case() {
         let json = serde_json::to_value(sample_result()).unwrap();
         assert_eq!(json["ttft_ms"], 320);
+        assert_eq!(json["first_content_ms"], 400);
+        assert_eq!(json["itl"]["p95_ms"], 31.0);
         assert_eq!(json["prompt_tokens"], 10);
         assert_eq!(json["completion_tokens"], 50);
         assert!(json.get("prompt_tokens_per_second").is_none(), "None 字段应被省略");
         // 取消态字段必须总是输出（前端用 === true 判断，不依赖是否存在）
         assert_eq!(json["canceled"], false);
+    }
+
+    /// 非推理模型没有思考阶段时，正文首字与首 token 可同时存在，
+    /// 但都缺失时应被省略而不是序列化成 null（前端按 undefined 判定无数据）
+    #[test]
+    fn test_single_result_omits_missing_latency_fields() {
+        let mut result = sample_result();
+        result.first_content_ms = None;
+        result.tpot_ms = None;
+        result.itl = None;
+
+        let json = serde_json::to_value(result).unwrap();
+        assert!(json.get("first_content_ms").is_none());
+        assert!(json.get("tpot_ms").is_none());
+        assert!(json.get("itl").is_none());
     }
 
     /// 前端未配置采样参数时传 null，必须解析为 None（使用服务端默认值）
@@ -159,6 +228,7 @@ mod tests {
         let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
         assert!(config.max_tokens.is_none());
         assert!(config.temperature.is_none());
+        assert!(!config.silent, "未传 silent 时应默认为 false（保持原有流式行为）");
     }
 
     /// 旧版前端不传采样参数时仍可解析（向后兼容）
@@ -186,10 +256,12 @@ mod tests {
             "messages": [],
             "window_id": 3,
             "max_tokens": 256,
-            "temperature": 0.0
+            "temperature": 0.0,
+            "silent": true
         });
         let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
         assert_eq!(config.max_tokens, Some(256));
         assert_eq!(config.temperature, Some(0.0));
+        assert!(config.silent, "梯度扫描依赖 silent 关闭逐 token 推送");
     }
 }
