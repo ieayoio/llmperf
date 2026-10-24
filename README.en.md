@@ -1,8 +1,8 @@
 # ⚡ LLM Concurrency Testing Tool (llmperf)
 
-> **Switch Language:** **中文** | [English](README.en.md)
+> **Switch Language:** [中文](README.md) | **English**
 
-A cross-platform desktop application based on [Tauri 2](https://tauri.app/) for **concurrent streaming request testing** of LLM APIs (compatible with OpenAI interface), allowing intuitive comparison of multiple request performances.
+A cross-platform desktop app built with [Tauri 2](https://tauri.app/) for **concurrent streaming load testing** of LLM APIs (OpenAI-compatible). It can render N parallel streams side by side, or ramp through a concurrency ladder automatically and plot throughput / latency curves with fine-grained jitter metrics.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-3c873a?logo=tauri)
@@ -11,39 +11,59 @@ A cross-platform desktop application based on [Tauri 2](https://tauri.app/) for 
 
 ## ✨ Features
 
-- **Concurrent Streaming Requests**: Send N streaming requests to LLM API simultaneously, comparing output effects in real-time
-- **Real-time Streaming Display**: Receive Token pushes via `stream_chunk` events, rendering streaming output instantly on the frontend
-- **Flexible Concurrency Configuration**: Support 1~50 concurrent requests, with window count dynamically adjusting to match
-- **Multi-window Comparison**: Display all concurrent window responses in a grid layout for easy horizontal comparison
-- **Request Timing Statistics**: Each window independently records total elapsed time (milliseconds) from send to completion
-- **Fine-grained Latency Metrics**: Besides TTFT and tok/s, it also reports first-content latency (separate from TTFT for reasoning models), TPOT (average chunk interval) and ITL P50/P95/max, exposing "fast start, stalled tail" jitter
-- **Concurrency Sweep**: Ramp through steps like `1,2,4,8,16`, plot throughput / TTFT / TPOT curves plus a per-step table to locate the saturation point, and export the sweep as CSV
-- **Error Capture & Display**: Errors during streaming requests are pushed to corresponding windows in real-time
-- **Internationalization Support**: Built-in Chinese and English (zh/en) internationalization with language switching
-- **Cross-platform Support**: Based on Tauri, supporting Linux, macOS, and Windows
-- **Dark Theme**: Carefully designed dark UI for comfortable viewing
+- **Concurrent streaming requests**: up to 50 parallel streams, with the window count following the concurrency setting
+- **Real-time streaming display**: tokens are pushed via `stream_chunk` events and rendered immediately
+- **Fine-grained latency metrics**: TTFT, first-content latency, total duration, Prompt / Completion tok/s, TPOT, ITL P50/P95/max
+- **Concurrency sweep**: ramp through steps like `1,2,4,8,16`, plot throughput / TTFT / TPOT curves and locate the saturation point
+- **Per-run summary**: mean, P50, P95, min/max across windows plus overall throughput
+- **CSV export**: per-window details and sweep summaries (BOM included, opens cleanly in Excel)
+- **Controllable cancellation**: cancel a single window or everything, keeping the partial output
+- **Internationalization**: Simplified Chinese / Traditional Chinese / English, switchable from the menu
+- **Cross-platform**: Linux, macOS and Windows, with a built-in dark theme
 
-## 🖼 Interface Preview
+## 🖼 Modes
 
-The main application interface is divided into two parts:
+The top bar manages Base URL, API Key, Model, Max Tokens, Temperature and the test message; the top-right switch selects the working mode:
 
-- **Top Configuration Bar**: Configure Base URL, API Key, Model, concurrency count, and input test messages
-- **Bottom Chat Window Area**: Display real-time streaming responses from each concurrent window in grid format
+| Mode | Behavior | Use case |
+|------|----------|----------|
+| **Chat** | N parallel streams rendered per window, multi-turn context accumulated separately, with a run summary and per-window metrics when done | Inspect output quality, compare answers under different concurrency |
+| **Sweep** | Steps through a concurrency ladder serially in silent mode (no per-token events), emitting only metrics, curves and a per-step table | Find the capacity ceiling and the throughput saturation point |
 
-Supports Enter key for quick message sending, and one-click clear all windows.
+In chat mode, Enter sends, and each window can be canceled individually or all at once.
 
-The header offers two modes: **Chat** (watch the streaming output of every window) and **Sweep** (silently ramp the concurrency and focus on metrics and curves).
+## 📊 Metric Definitions
+
+All timings are measured client-side; only the token speeds fall back to server-reported values. Canceled or failed requests are excluded from speed / jitter statistics so partial samples never pollute the summary.
+
+| Metric | Meaning | Source |
+|--------|---------|--------|
+| **TTFT** | Time from sending the request to the first delta (reasoning or content) | Client-side timestamp |
+| **First content** | Time to the first **content** delta; for reasoning models ≈ TTFT + thinking time | Client-side timestamp |
+| **Duration** | Time from sending to end of stream | Client-side timestamp |
+| **Prompt tok/s** | Prefill speed | API `timings` when available, otherwise `usage` + TTFT (cache hits deducted) |
+| **Completion tok/s** | Decode speed | `timings.predicted_per_second` when available, otherwise `completion_tokens / (duration - TTFT)` |
+| **TPOT** | Mean chunk interval = (last − first delta) / (deltas − 1) | Client-side timestamps |
+| **ITL P50/P95/max** | Percentiles of consecutive delta intervals, exposing stalls | Client-side timestamps |
+| **Throughput** | Total completion tokens of the run / wall-clock seconds | Aggregated |
+
+> ⚠️ TPOT / ITL are measured in **SSE chunks**. When the server puts exactly one token per chunk, this equals the true per-token latency; if it packs several tokens per chunk, the numbers are inflated (a server implementation detail, not a measurement bug).
+
+> 💡 Reasoning tokens are counted in Completion, so the decode window is anchored at the *first delta* rather than the first content delta — otherwise the thinking phase would be mistaken for prefill.
 
 ## 🛠 Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| Frontend Framework | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
-| Build Tool | [Vite 7](https://vitejs.dev/) |
-| Desktop Framework | [Tauri 2](https://tauri.app/) (Rust) |
-| HTTP Client | [reqwest](https://crates.io/crates/reqwest) (talks to OpenAI-compatible interface) |
-| Async Runtime | [tokio](https://tokio.rs/) (built into Tauri) |
-| Streaming Processing | [futures](https://crates.io/crates/futures) |
+| Frontend | [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
+| Build tool | [Vite 7](https://vitejs.dev/) |
+| Desktop framework | [Tauri 2](https://tauri.app/) (Rust) |
+| HTTP client | [reqwest](https://crates.io/crates/reqwest) (OpenAI-compatible, connection pooling) |
+| Async runtime | [tokio](https://tokio.rs/) (one task per request) |
+| Streaming | [futures-util](https://crates.io/crates/futures-util) byte streams + a hand-written SSE parser |
+| Serialization | [serde](https://serde.rs/) / [serde_json](https://crates.io/crates/serde_json) |
+| Cancellation | [tokio-util](https://crates.io/crates/tokio-util) (`CancellationToken`) |
+| Charts | Hand-written SVG (no chart library) |
 
 ## 📦 Installation
 
@@ -82,9 +102,9 @@ npm run tauri build -- --target x86_64-unknown-linux-gnu
 
 # Build Windows version on non-Windows platforms
 npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
+```
 
 > 💡 Reference: [Windows Installer Build Guide](https://v2.tauri.app/distribute/windows-installer/)
-```
 
 Build artifacts are located in `src-tauri/target/release/bundle/` directory, depending on the target platform:
 
@@ -106,68 +126,98 @@ Build artifacts are located in `src-tauri/target/release/bundle/` directory, dep
 
 ## 📖 Usage Guide
 
-1. **Configure API Endpoint**: Enter the LLM API Base URL (e.g., `http://127.0.0.1:16777/v1`)
-2. **Enter API Key**: Input your API key
-3. **Select Model**: Specify the model name to test (e.g., `gpt-4o`, `qwen2.5-72b`, etc.)
-4. **Set Concurrency**: Enter a number between 1~50, representing the number of simultaneous requests
-5. **Input Message**: Type the test content in the message input box
-6. **Click Send**: Click the 🚀 send button, or press Enter key
+Both modes share the top configuration: Base URL, API Key, Model, Max Tokens, Temperature and the test message.
+Leaving Max Tokens / Temperature empty means "use the server default"; **fix Max Tokens when benchmarking**, otherwise tok/s is not comparable across runs.
 
-After sending, each window will independently receive streaming responses and display total elapsed time upon completion.
+### Chat Mode
 
-## 🏗 Project Structure
+1. Switch to **Chat** in the top-right corner
+2. Fill in the Base URL (e.g. `http://127.0.0.1:16777/v1`), API Key and model name
+3. Set the concurrency (1~50); the number of windows follows automatically
+4. Type the test message and click 🚀 or press Enter
+5. Each window streams independently; once finished, its header shows first token / first content / TPOT / ITL95 / tok/s
+6. The summary panel below aggregates mean / P50 / P95 / min / max across windows, and can export CSV
 
-```
-llmperf/
-├── src/                      # React Frontend
-│   ├── main.tsx              # Application entry
-│   ├── App.tsx               # Main component (concurrent streaming request logic)
-│   ├── App.css               # Dark theme styles
-│   ├── i18n/                 # Internationalization support
-│   │   ├── index.ts          # i18n configuration
-│   │   └── locales/          # Locale files
-│   │       ├── zh.json       # Chinese
-│   │       └── en.json       # English
-│   └── assets/               # Static assets
-├── src-tauri/                # Tauri Backend (Rust)
-│   ├── src/
-│   │   ├── main.rs           # Rust entry
-│   │   └── lib.rs            # Tauri commands & concurrent request logic
-│   ├── Cargo.toml            # Rust dependencies
-│   ├── tauri.conf.json       # Tauri configuration
-│   └── build.rs              # Build script
-├── index.html                # HTML entry
-├── vite.config.ts            # Vite configuration
-├── tsconfig.json             # TypeScript configuration
-├── README.md                 # Chinese documentation
-├── README.en.md              # English documentation
-└── package.json              # Node.js dependencies
-```
+Every window accumulates its own multi-turn history for display; the context sent to the model is based on window 0, so all windows always send the same prompt.
+
+### Concurrency Sweep
+
+1. Switch to **Sweep** in the top-right corner
+2. Enter the concurrency ladder, e.g. `1,2,4,8,16` (comma or space separated, de-duplicated and sorted, at most 8 steps)
+3. Set rounds per step (1~5): more rounds smooth single-run noise but multiply the total sweep time
+4. Type the message and click 📈 Start sweep
+5. Read the curves and the table: **the step where throughput stops rising and TTFT / TPOT starts to bend upward is the saturation point**
+6. Click Stop to abort at any time; the unfinished step is not recorded
+
+The sweep runs in silent mode: no per-token events and no window rendering, so it is not limited by frontend rendering capacity.
+Steps run serially — the next step starts only after the previous one has fully finished — so samples from different steps never overlap.
+
+### Export
+
+- **Chat mode**: exports the **per-window details** for the last run, with columns
+  `window,status,ttft_ms,first_content_ms,duration_ms,tpot_ms,itl_p50_ms,itl_p95_ms,itl_max_ms,prompt_tokens,completion_tokens,completion_tps,prompt_tps,error`
+- **Sweep mode**: exports **one row per step**, with columns
+  `concurrency,rounds,success,failed,canceled,wall_clock_ms,throughput_tps,ttft_p50_ms,ttft_p95_ms,first_content_p50_ms,tpot_avg_ms,completion_tps_p50,duration_p95_ms,itl_p95_avg_ms`
+
+Files are written to the system downloads directory with a UTF-8 BOM so Excel reads them correctly.
 
 ## 🔧 Architecture Overview
 
+```mermaid
+flowchart LR
+    UI["Config bar / Chat windows / Sweep panel"] -->|invoke| CMD["send_concurrent_request<br/>concurrent.rs"]
+    CMD --> R1["request.rs × N<br/>SSE parsing + metric sampling"]
+    R1 -->|EventSink| EV["stream_chunk events<br/>silent in sweep mode"]
+    EV -->|rendered in chat mode| UI
+    R1 --> API[("LLM API<br/>OpenAI compatible")]
+    CANCEL["cancel.rs<br/>window_id → CancellationToken"] -.-> R1
+    R1 -->|return value| UI
 ```
-┌─────────────── Frontend (React + Vite) ───────────────┐
-│                                                        │
-│  ┌─────────────┐  invoke  ──────────────────────────▶ │  ┌───────────────────┐  │
-│  │  Config & UI  │                                     │  │  send_concurrent  │  │
-│  │  Message Input│  stream_chunk event ◀────────────── │  │  _request (Rust)  │  │
-│  │  Window Grid  │                                     │  │  (reqwest)       │  │
-│  └─────────────┘                                     │  └───────────────────┘  │
-│                                                      │          │               │
-│                                                      │          ▼               │
-│                                                      │  ┌───────────────────┐  │
-│                                                      │  │  N Concurrent     │  │
-│                                                      │  │  Requests         │  │
-│                                                      │  │  (tokio spawn)    │  │
-│                                                      │  └─────────┬─────────┘  │
-│                                                      │            │             │
-└──────────────────────────────────────────────────────┘            ▼
-                                                       ┌──────────────────┐
-                                                       │  LLM API         │
-                                                       │  (OpenAI Compat)  │
-                                                       └──────────────────┘
+
+- **Frontend** only collects configuration, renders events and aggregates statistics; all metric computation (TTFT / ITL / tok/s) happens in Rust so JS timing is never skewed by rendering.
+- **Backend** maps each `window_id` to a `tokio` task with its own cancellation token; a single `EventSink` decides whether events are pushed to the frontend.
+- **Silent mode** (`config.silent = true`) drops all events and returns results only through the command return value — this is what makes a sweep with dozens of parallel requests viable.
+
+## 📁 Project Structure
+
 ```
+src/                      # Frontend (React + TypeScript)
+├── App.tsx               # Main UI: config bar, mode switch, chat windows, summary table
+├── SweepPanel.tsx        # Sweep panel: SVG charts + per-step table
+├── metrics.ts            # Metric aggregation, statistics, CSV export
+└── i18n/                 # Internationalization (zh-SC / zh-TC / en)
+
+src-tauri/src/            # Backend (Rust)
+├── lib.rs                # Tauri commands, window actions, file export
+├── request.rs            # Single streaming request: SSE consumption, metrics, events
+├── concurrent.rs         # N-way concurrency orchestration
+├── cancel.rs             # Cancellation registry keyed by window_id
+├── types.rs              # Shared data structures (SingleResult / StreamChunkEvent, ...)
+├── llm_tool.rs           # OpenAI-compatible client and SSE parser
+└── menu.rs               # Native menu
+```
+
+## 🧪 Testing
+
+```bash
+# Frontend type check
+npx tsc --noEmit
+
+# Backend unit tests (no network required)
+cd src-tauri && cargo test --lib
+
+# Live tests against a real API: export the env vars, then run manually
+# (covers streaming, reasoning models and the TPOT/ITL definition; ignored by default)
+export LLMPERF_TEST_BASE_URL="http://127.0.0.1:16777/v1"
+export LLMPERF_TEST_API_KEY="sk-xxx"
+export LLMPERF_TEST_MODEL_CHAT="testllm-nk"
+export LLMPERF_TEST_MODEL_REASONER="testllm"
+
+cargo test --test llm_tool_integration   # client integration tests
+cargo test --lib -- --ignored            # metric definition live tests
+```
+
+Without the environment variables the live tests skip instead of failing, keeping CI green.
 
 ## 🤖 Development Notes
 
