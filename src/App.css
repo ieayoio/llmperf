@@ -122,6 +122,68 @@ html, body, #root {
   min-width: auto;
 }
 
+/* ====== 高级参数（可折叠） ====== */
+/* 默认收起：只留一个折叠按钮，低频配置不再占据首屏 */
+.config-advanced {
+  margin-bottom: 12px;
+}
+
+.config-advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-1);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.config-advanced-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* 展开后旋转 90° 的三角，避免额外引入图标库 */
+.config-advanced-caret {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.15s;
+}
+
+.config-advanced.open .config-advanced-caret {
+  transform: rotate(90deg);
+}
+
+/* 收起状态下的参数数量提示，弱化显示避免和标题抢注意力 */
+.config-advanced-hint {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.config-advanced-body {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-0);
+}
+
+/* 每排三个输入框，窄窗口时自动换行而不溢出 */
+.config-advanced-body .config-row {
+  flex-wrap: wrap;
+}
+
+.config-advanced-body .config-row:last-child {
+  margin-bottom: 0;
+}
+
 .config-actions {
   display: flex;
   gap: 8px;

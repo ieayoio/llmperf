@@ -148,6 +148,50 @@ function formatAccel(accel: string): string[] {
  */
 const SWEEP_WINDOW_BASE = 100_000;
 
+/** 高级采样参数（全部为 null 时表示不传，交给服务端默认值） */
+interface SamplingParams {
+  max_tokens: number | null;
+  temperature: number | null;
+  top_p: number | null;
+  frequency_penalty: number | null;
+  presence_penalty: number | null;
+  seed: number | null;
+}
+
+/** 高级参数输入框的原始字符串值 */
+interface AdvancedParamInputs {
+  maxTokens: string;
+  temperature: string;
+  topP: string;
+  frequencyPenalty: string;
+  presencePenalty: string;
+  seed: string;
+}
+
+/**
+ * 把输入框内容转换成请求参数
+ *
+ * 留空（或非法数字）→ null，表示该字段不传给 API；
+ * `max_tokens` / `seed` 只接受整数，其余保留小数（如 temperature 0.7）。
+ */
+function buildSamplingParams(input: AdvancedParamInputs): SamplingParams {
+  const maxTokensValue = parseOptionalNumber(input.maxTokens);
+  const seedValue = parseOptionalNumber(input.seed);
+  return {
+    max_tokens: maxTokensValue === null ? null : Math.max(1, Math.round(maxTokensValue)),
+    temperature: parseOptionalNumber(input.temperature),
+    top_p: parseOptionalNumber(input.topP),
+    frequency_penalty: parseOptionalNumber(input.frequencyPenalty),
+    presence_penalty: parseOptionalNumber(input.presencePenalty),
+    seed: seedValue === null ? null : Math.round(seedValue),
+  };
+}
+
+/** 统计已配置的高级参数数量（收起时提示用户参数已生效） */
+function countConfiguredParams(params: SamplingParams): number {
+  return Object.values(params).filter((value) => value !== null).length;
+}
+
 function App() {
   const [baseURL, setBaseURL] = useState("http://127.0.0.1:16777/v1");
   const [apiKey, setApiKey] = useState("");
@@ -159,6 +203,13 @@ function App() {
   // 压测时建议固定 max tokens（否则不同轮次的 tok/s 无法横向比较）
   const [maxTokens, setMaxTokens] = useState("");
   const [temperature, setTemperature] = useState("");
+  // 其余可选采样参数：同样留空即不参与请求
+  const [topP, setTopP] = useState("");
+  const [frequencyPenalty, setFrequencyPenalty] = useState("");
+  const [presencePenalty, setPresencePenalty] = useState("");
+  const [seed, setSeed] = useState("");
+  // 高级参数面板默认收起：低频配置不占首屏，需要时再展开
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // 最近一轮的汇总结果（null 表示还没完成过一轮）
   const [lastRun, setLastRun] = useState<RunSummary | null>(null);
@@ -442,6 +493,24 @@ function App() {
     activeThumbRef.current?.scrollIntoView({ block: "nearest" });
   }, [focusedId]);
 
+  /**
+   * 组装当前输入框中的采样参数
+   *
+   * 对话与扫描共用同一份配置，集中在这里避免两处解析逻辑走偏。
+   */
+  const currentSampling = (): SamplingParams =>
+    buildSamplingParams({
+      maxTokens,
+      temperature,
+      topP,
+      frequencyPenalty,
+      presencePenalty,
+      seed,
+    });
+
+  /** 已配置的高级参数数量（面板收起时用于提示参数已生效） */
+  const configuredParamCount = countConfiguredParams(currentSampling());
+
   const handleSend = async () => {
     // 防重复提交：上一轮流式尚未结束时（按钮/回车都可能触发）直接忽略。
     // 否则会重复追加 user 消息，并让后端覆盖注册导致上一轮被取消、半截内容写进历史。
@@ -497,7 +566,8 @@ function App() {
 
     // 3) 为每个活跃窗口发送一份请求，所有请求使用相同 messages，仅 window_id 不同用于后端分流
     const startedAt = performance.now();
-    const maxTokensValue = parseOptionalNumber(maxTokens);
+    // 采样参数：null 表示不传，交给服务端默认值
+    const sampling = currentSampling();
     const promises = Array.from({ length: concurrency }).map((_, i) =>
       invoke<SingleResult[]>("send_concurrent_request", {
         config: {
@@ -506,10 +576,7 @@ function App() {
           model: model,
           messages: fullMessages,
           window_id: i,
-          // 采样参数：null 表示不传，交给服务端默认值
-          max_tokens:
-            maxTokensValue === null ? null : Math.max(1, Math.round(maxTokensValue)),
-          temperature: parseOptionalNumber(temperature),
+          ...sampling,
         },
         concurrency: 1,
       })
@@ -621,8 +688,7 @@ function App() {
     setSweepRunning(true);
     sweepStopRef.current = false;
 
-    const maxTokensValue = parseOptionalNumber(maxTokens);
-    const temperatureValue = parseOptionalNumber(temperature);
+    const sampling = currentSampling();
     const rounds = Math.min(5, Math.max(1, Math.floor(sweepRounds) || 1));
     const collected: SweepPoint[] = [];
 
@@ -652,9 +718,7 @@ function App() {
                 // 扫描只看指标，不带多轮上下文，保证每档的 prompt 一致
                 messages: [{ role: "user", content: userMessage }],
                 window_id: SWEEP_WINDOW_BASE + i,
-                max_tokens:
-                  maxTokensValue === null ? null : Math.max(1, Math.round(maxTokensValue)),
-                temperature: temperatureValue,
+                ...sampling,
                 // 静默模式：不推送逐 token 事件，避免几十路并发刷爆界面
                 silent: true,
               },
@@ -827,32 +891,86 @@ function App() {
           </div>
         </div>
 
-        {/* 采样参数：留空则使用服务端默认值。
-            压测时固定 max tokens，才能让不同轮次的 tok/s 具有可比性 */}
-        <div className="config-row">
-          <div className="config-field">
-            <label>{t("config.maxTokens")}</label>
-            <input
-              type="number"
-              min={1}
-              placeholder={t("config.maxTokensPlaceholder")}
-              value={maxTokens}
-              onChange={(e) => setMaxTokens(e.target.value)}
-            />
-          </div>
+        {/* 采样参数默认收起：避免低频配置长期挤占首屏，用户需要时再展开。
+            留空即使用服务端默认值；压测时固定 max tokens，才能让不同轮次的 tok/s 具有可比性 */}
+        <div className={`config-advanced${advancedOpen ? " open" : ""}`}>
+          <button
+            type="button"
+            className="config-advanced-toggle"
+            onClick={() => setAdvancedOpen((open) => !open)}
+            aria-expanded={advancedOpen}
+          >
+            <span className="config-advanced-caret" aria-hidden="true">
+              ▸
+            </span>
+            {t("config.advanced")}
+            {/* 收起时也要能让用户确认参数已生效 */}
+            <span className="config-advanced-hint">
+              {configuredParamCount > 0
+                ? t("config.advancedConfigured", configuredParamCount)
+                : t("config.advancedDefault")}
+            </span>
+          </button>
 
-          <div className="config-field">
-            <label>{t("config.temperature")}</label>
-            <input
-              type="number"
-              min={0}
-              max={2}
-              step={0.1}
-              placeholder={t("config.temperaturePlaceholder")}
-              value={temperature}
-              onChange={(e) => setTemperature(e.target.value)}
-            />
-          </div>
+          {advancedOpen && (
+            <div className="config-advanced-body">
+              <div className="config-row">
+                <ParamField
+                  label={t("config.maxTokens")}
+                  placeholder={t("config.maxTokensPlaceholder")}
+                  min={1}
+                  value={maxTokens}
+                  onChange={setMaxTokens}
+                />
+                <ParamField
+                  label={t("config.temperature")}
+                  placeholder={t("config.temperaturePlaceholder")}
+                  min={0}
+                  max={2}
+                  step={0.1}
+                  value={temperature}
+                  onChange={setTemperature}
+                />
+                <ParamField
+                  label={t("config.topP")}
+                  placeholder={t("config.topPPlaceholder")}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={topP}
+                  onChange={setTopP}
+                />
+              </div>
+              <div className="config-row">
+                <ParamField
+                  label={t("config.frequencyPenalty")}
+                  placeholder={t("config.frequencyPenaltyPlaceholder")}
+                  min={-2}
+                  max={2}
+                  step={0.1}
+                  value={frequencyPenalty}
+                  onChange={setFrequencyPenalty}
+                />
+                <ParamField
+                  label={t("config.presencePenalty")}
+                  placeholder={t("config.presencePenaltyPlaceholder")}
+                  min={-2}
+                  max={2}
+                  step={0.1}
+                  value={presencePenalty}
+                  onChange={setPresencePenalty}
+                />
+                <ParamField
+                  label={t("config.seed")}
+                  placeholder={t("config.seedPlaceholder")}
+                  min={0}
+                  step={1}
+                  value={seed}
+                  onChange={setSeed}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 第三行随模式切换：对话模式配置并发数，扫描模式配置并发梯度 */}
@@ -1179,6 +1297,40 @@ function MessageInput({
         onKeyDown={(e) => {
           if (e.key === "Enter") onSubmit();
         }}
+      />
+    </div>
+  );
+}
+
+/* ====== 高级参数输入框（留空表示不传给 API，使用服务端默认值） ====== */
+function ParamField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  min,
+  max,
+  step,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  min: number;
+  max?: number;
+  step?: number;
+}) {
+  return (
+    <div className="config-field">
+      <label>{label}</label>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
       />
     </div>
   );

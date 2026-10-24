@@ -24,7 +24,7 @@ A cross-platform desktop app built with [Tauri 2](https://tauri.app/) for **conc
 
 ## 🖼 Modes
 
-The top bar manages Base URL, API Key, Model, Max Tokens, Temperature and the test message; the top-right switch selects the working mode:
+The top bar manages Base URL, API Key, Model and the test message, while the top-right switch selects the working mode. Max Tokens, Temperature, Top P, Frequency / Presence Penalty and Seed live in a collapsed **Advanced Parameters** panel (collapsed by default); leaving them empty uses the server defaults:
 
 | Mode | Behavior | Use case |
 |------|----------|----------|
@@ -162,8 +162,8 @@ Build artifacts are located in `src-tauri/target/release/bundle/` directory, dep
 
 ## 📖 Usage Guide
 
-Both modes share the top configuration: Base URL, API Key, Model, Max Tokens, Temperature and the test message.
-Leaving Max Tokens / Temperature empty means "use the server default"; **fix Max Tokens when benchmarking**, otherwise tok/s is not comparable across runs.
+Both modes share the top configuration: Base URL, API Key, Model and the test message.
+Expand **Advanced Parameters** to set Max Tokens, Temperature, Top P, Frequency Penalty, Presence Penalty and Seed. They are collapsed by default and fully optional — an empty field means "use the server default". **Fix Max Tokens when benchmarking**, otherwise tok/s is not comparable across runs.
 
 ### Chat Mode
 

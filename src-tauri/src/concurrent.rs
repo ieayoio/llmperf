@@ -22,6 +22,11 @@ pub async fn run_concurrent_requests(
     // 采样参数透传：压测需固定输出长度/温度，保证各轮结果可比
     let max_tokens = config.max_tokens;
     let temperature = config.temperature;
+    // 高级采样参数（核采样 / 惩罚项 / 种子）：未配置时为 None，保持不透传
+    let top_p = config.top_p;
+    let frequency_penalty = config.frequency_penalty;
+    let presence_penalty = config.presence_penalty;
+    let seed = config.seed;
     // 静默模式同样需要透传：否则扫描时每个子请求都会推送流式事件
     let silent = config.silent;
     // 使用 config.window_id 作为基准窗口标识
@@ -39,6 +44,10 @@ pub async fn run_concurrent_requests(
             timeout_secs,
             max_tokens,
             temperature,
+            top_p,
+            frequency_penalty,
+            presence_penalty,
+            seed,
             silent,
         })
         .collect();

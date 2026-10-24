@@ -466,6 +466,10 @@ pub async fn execute_stream_request(
         model: config.model.trim().to_string(),
         max_tokens: config.max_tokens,
         temperature: config.temperature,
+        top_p: config.top_p,
+        frequency_penalty: config.frequency_penalty,
+        presence_penalty: config.presence_penalty,
+        seed: config.seed,
         ..Default::default()
     };
 

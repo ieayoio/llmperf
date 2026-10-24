@@ -24,7 +24,7 @@
 
 ## 🖼 界面与模式
 
-顶部配置栏统一管理 Base URL、API Key、Model、Max Tokens、Temperature 与测试消息，右上角切换两种工作模式：
+顶部配置栏统一管理 Base URL、API Key、Model 与测试消息，右上角切换两种工作模式；Max Tokens、Temperature、Top P、Frequency / Presence Penalty、Seed 收在「模型高级参数」折叠面板中，默认不展开，且全部留空即使用服务端默认值：
 
 | 模式 | 行为 | 适合场景 |
 |------|------|----------|
@@ -162,8 +162,8 @@ npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
 
 ## 📖 使用说明
 
-两种模式共用顶部配置：Base URL、API Key、Model、Max Tokens、Temperature 与测试消息。
-Max Tokens / Temperature 留空表示交给服务端默认值；**压测时建议固定 Max Tokens**，否则不同轮次的 tok/s 无法横向比较。
+两种模式共用顶部配置：Base URL、API Key、Model 与测试消息。
+点击「模型高级参数」可展开 Max Tokens、Temperature、Top P、Frequency Penalty、Presence Penalty、Seed；这些参数默认收起且都是可选的，留空表示交给服务端默认值。**压测时建议固定 Max Tokens**，否则不同轮次的 tok/s 无法横向比较。
 
 ### 对话模式
 

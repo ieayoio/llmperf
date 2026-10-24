@@ -136,6 +136,18 @@ pub struct LLMRequestConfig {
     /// 可复现性测试建议设为 0。
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// 核采样概率 [0.0, 1.0]，与 temperature 二选一使用，None 表示使用服务端默认值
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    /// 频率惩罚 [-2.0, 2.0]，正值抑制重复用词，None 表示使用服务端默认值
+    #[serde(default)]
+    pub frequency_penalty: Option<f32>,
+    /// 存在惩罚 [-2.0, 2.0]，正值鼓励模型引入新话题，None 表示使用服务端默认值
+    #[serde(default)]
+    pub presence_penalty: Option<f32>,
+    /// 随机种子，配置后采样结果尽量可复现（需服务端支持），None 表示不传递
+    #[serde(default)]
+    pub seed: Option<i64>,
     /// 静默模式：不向前端推送任何 `stream_chunk` 事件，结果仅通过命令返回值回传
     ///
     /// 并发梯度扫描时同时会有几十路请求，逐 token 推送会让 webview 频繁重渲染，
@@ -228,6 +240,10 @@ mod tests {
         let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
         assert!(config.max_tokens.is_none());
         assert!(config.temperature.is_none());
+        assert!(config.top_p.is_none());
+        assert!(config.frequency_penalty.is_none());
+        assert!(config.presence_penalty.is_none());
+        assert!(config.seed.is_none());
         assert!(!config.silent, "未传 silent 时应默认为 false（保持原有流式行为）");
     }
 
@@ -244,6 +260,8 @@ mod tests {
         let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
         assert!(config.max_tokens.is_none());
         assert!(config.temperature.is_none());
+        assert!(config.top_p.is_none());
+        assert!(config.seed.is_none());
     }
 
     /// 配置采样参数时应正确透传
@@ -257,11 +275,19 @@ mod tests {
             "window_id": 3,
             "max_tokens": 256,
             "temperature": 0.0,
+            "top_p": 0.9,
+            "frequency_penalty": 0.5,
+            "presence_penalty": -0.5,
+            "seed": 42,
             "silent": true
         });
         let config: LLMRequestConfig = serde_json::from_value(json).unwrap();
         assert_eq!(config.max_tokens, Some(256));
         assert_eq!(config.temperature, Some(0.0));
+        assert_eq!(config.top_p, Some(0.9));
+        assert_eq!(config.frequency_penalty, Some(0.5));
+        assert_eq!(config.presence_penalty, Some(-0.5));
+        assert_eq!(config.seed, Some(42));
         assert!(config.silent, "梯度扫描依赖 silent 关闭逐 token 推送");
     }
 }

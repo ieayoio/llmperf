@@ -191,6 +191,10 @@ pub struct ChatParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
 
+    /// 随机种子，配置后采样结果尽量可复现（需服务端支持）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+
     /// 停止词列表，模型生成到这些词时停止
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
