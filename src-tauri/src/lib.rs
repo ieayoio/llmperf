@@ -3,7 +3,6 @@ mod types;
 mod request;
 mod concurrent;
 mod cancel;
-mod llm_tool;
 mod menu;
 
 use std::path::{Path, PathBuf};
@@ -13,10 +12,6 @@ use tauri::{Emitter, Manager, Runtime};
 use tauri_plugin_opener::OpenerExt;
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
-pub use llm_tool::{
-    ChatCompletion, ChatMessage, ChatParams, ClientConfig, LlmClient, LlmError, Role,
-    StreamAccumulator, StreamEvent, Timings,
-};
 
 /// 帮助菜单使用的固定链接
 ///

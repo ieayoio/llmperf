@@ -205,15 +205,17 @@ npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
 ```mermaid
 flowchart LR
     UI["配置栏 / 对话窗口 / 扫描面板"] -->|invoke| CMD["send_concurrent_request<br/>concurrent.rs"]
-    CMD --> R1["request.rs × N<br/>SSE 解析 + 指标打点"]
+    CMD --> R1["request.rs × N<br/>SSE 消费 + 指标打点"]
     R1 -->|EventSink| EV["stream_chunk 事件<br/>silent 模式下静默"]
     EV -->|对话模式实时渲染| UI
-    R1 --> API[("LLM API<br/>OpenAI 兼容")]
+    R1 --> CLIENT["llm-client crate<br/>OpenAI 兼容客户端"]
+    CLIENT --> API[("LLM API<br/>OpenAI 兼容")]
     CANCEL["cancel.rs<br/>window_id → CancellationToken"] -.-> R1
     R1 -->|返回值| UI
 ```
 
 - **前端** 只负责采集配置、展示事件与聚合统计；指标计算（TTFT / ITL / tok/s）全部在后端完成，避免 JS 计时受渲染阻塞影响。
+- **通用客户端** 抽在独立 crate `llm-client` 中（不依赖 Tauri），负责 HTTP/SSE 解析、重试、取消与指标工具，便于其他项目复用。
 - **后端** 每个 `window_id` 对应一个 `tokio` 任务，独立注册取消令牌；`EventSink` 统一控制是否向前端推送事件。
 - **静默模式**（`config.silent = true`）下事件被丢弃，结果只通过命令返回值回传，这是梯度扫描能跑几十路并发的前提。
 - **菜单** 由后端建立并维护可用性 / 勾选状态：前端通过 `set_menu_state` 推送界面状态，菜单动作中依赖界面状态的部分（发送、导出、切模式）由后端转成 `menu-command` 事件交前端执行，其余（窗口、缩放、全屏、打开链接）在后端直接完成。
@@ -229,13 +231,45 @@ src/                      # 前端（React + TypeScript）
 
 src-tauri/src/            # 后端（Rust）
 ├── lib.rs                # Tauri 命令注册、菜单动作分发、窗口/缩放/全屏、导出文件
-├── request.rs            # 单次流式请求：SSE 消费、指标计算、事件发射
+├── request.rs            # 单次流式请求：消费客户端事件、指标汇总、事件发射
 ├── concurrent.rs         # N 路并发编排
 ├── cancel.rs             # 按 window_id 的取消注册表
 ├── types.rs              # 前后端数据结构（SingleResult / StreamChunkEvent 等）
-├── llm_tool.rs           # OpenAI 兼容客户端与 SSE 解析器
 └── menu.rs               # 原生菜单：MENU_DEFS 表驱动 + 状态联动 + 语言就地更新
+
+src-tauri/crates/llm-client/   # 通用 OpenAI 兼容客户端（独立 crate，可复用到其他项目）
+├── README.md             # 使用说明：快速开始 / 配置 / 事件 / 指标 / 兼容性
+├── src/client.rs         # 请求构造、重试退避、取消、流式适配
+├── src/config.rs         # 客户端配置（认证方式 / 分级超时 / 代理 / 自定义头）
+├── src/message.rs        # 消息模型（多模态 / 工具调用 / 推理链）
+├── src/params.rs         # 请求参数（采样 / 工具 / 结构化输出 / 向量化）
+├── src/response.rs       # 响应模型（usage 明细 / timings / 模型列表 / 向量化）
+├── src/sse.rs            # SSE 解码器（纯内存、无 I/O，便于单测）
+├── src/stream.rs         # 流式事件、ChatStream、结果累加器
+├── src/metrics.rs        # TTFT / TPOT / ITL / token 速度
+├── tests/mock_server.rs  # 本地 mock HTTP 集成测试（无需外网）
+└── examples/             # chat / stream 两个可运行示例
 ```
+
+## 🧩 通用 LLM 客户端（llm-client）
+
+OpenAI 兼容调用已抽成独立 crate，不依赖 Tauri，可在其他 Rust 项目直接复用：
+
+```rust
+use llm_client::{ChatMessage, ChatParams, ClientConfig, LlmClient};
+
+let client = LlmClient::new(ClientConfig::new("https://api.deepseek.com/v1", "sk-xxx"))?;
+let params = ChatParams::new("deepseek-chat").with_temperature(0.2);
+let reply = client.chat(vec![ChatMessage::user("你好")], &params).await?;
+println!("{}", reply.content());
+```
+
+覆盖：流式/非流式、思考内容、工具调用（含流式增量累积）、多模态、多候选、取消令牌、重试与退避、
+连接/响应头/流空闲三级超时、结构化错误（状态码 + 业务码 + Retry-After）、模型列表与向量化，
+以及 TTFT / TPOT / ITL / tok/s 指标工具。
+
+完整的 API 说明、配置项默认值、事件语义与厂商兼容性清单见
+[crates/llm-client/README.md](src-tauri/crates/llm-client/README.md)。
 
 ## 🧪 测试
 
@@ -243,18 +277,17 @@ src-tauri/src/            # 后端（Rust）
 # 前端类型检查
 npx tsc --noEmit
 
-# 后端单元测试（无需网络）
-cd src-tauri && cargo test --lib
+# 后端单元测试 + mock 集成测试（无需网络）
+cd src-tauri && cargo test -p llm-client     # 客户端：单测 + 本地 mock HTTP 集成测试
+cargo test -p llmperf --lib                 # 应用层单测
 
-# 需要真实 API 的联调测试：配置环境变量后手动运行
-# （包含流式调用、推理模型与 TPOT/ITL 口径校验，默认 #[ignore]）
+# 真实 API 联调：配置环境变量后运行（未配置时自动跳过）
 export LLMPERF_TEST_BASE_URL="http://127.0.0.1:16777/v1"
 export LLMPERF_TEST_API_KEY="sk-xxx"
 export LLMPERF_TEST_MODEL_CHAT="testllm-nk"
 export LLMPERF_TEST_MODEL_REASONER="testllm"
 
-cargo test --test llm_tool_integration   # 客户端集成测试
-cargo test --lib -- --ignored            # 指标口径联调测试
+cargo test -p llm-client --test live_api    # 客户端联调（含 TPOT/ITL 口径校验）
 ```
 
 未设置对应环境变量时，联调测试会自动跳过而不是失败，方便在 CI 中保持绿灯。

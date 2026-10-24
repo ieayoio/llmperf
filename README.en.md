@@ -205,15 +205,17 @@ Exporting opens a native save dialog: it defaults to the system downloads direct
 ```mermaid
 flowchart LR
     UI["Config bar / Chat windows / Sweep panel"] -->|invoke| CMD["send_concurrent_request<br/>concurrent.rs"]
-    CMD --> R1["request.rs × N<br/>SSE parsing + metric sampling"]
+    CMD --> R1["request.rs × N<br/>SSE consumption + metric sampling"]
     R1 -->|EventSink| EV["stream_chunk events<br/>silent in sweep mode"]
     EV -->|rendered in chat mode| UI
-    R1 --> API[("LLM API<br/>OpenAI compatible")]
+    R1 --> CLIENT["llm-client crate<br/>OpenAI-compatible client"]
+    CLIENT --> API[("LLM API<br/>OpenAI compatible")]
     CANCEL["cancel.rs<br/>window_id → CancellationToken"] -.-> R1
     R1 -->|return value| UI
 ```
 
 - **Frontend** only collects configuration, renders events and aggregates statistics; all metric computation (TTFT / ITL / tok/s) happens in Rust so JS timing is never skewed by rendering.
+- **Reusable client** lives in its own crate `llm-client` (no Tauri dependency) and owns HTTP/SSE parsing, retries, cancellation and metric helpers, so other projects can depend on it directly.
 - **Backend** maps each `window_id` to a `tokio` task with its own cancellation token; a single `EventSink` decides whether events are pushed to the frontend.
 - **Silent mode** (`config.silent = true`) drops all events and returns results only through the command return value — this is what makes a sweep with dozens of parallel requests viable.
 - **Menu** is built and kept up to date by the backend: the frontend pushes UI state through `set_menu_state`, while menu actions that depend on UI state (send, export, mode switch) are turned into `menu-command` events for the frontend, and the rest (window, zoom, fullscreen, opening links) are handled in Rust directly.
@@ -229,13 +231,46 @@ src/                      # Frontend (React + TypeScript)
 
 src-tauri/src/            # Backend (Rust)
 ├── lib.rs                # Tauri commands, menu action dispatch, window/zoom/fullscreen, file export
-├── request.rs            # Single streaming request: SSE consumption, metrics, events
+├── request.rs            # Single streaming request: consume client events, aggregate metrics, emit events
 ├── concurrent.rs         # N-way concurrency orchestration
 ├── cancel.rs             # Cancellation registry keyed by window_id
 ├── types.rs              # Shared data structures (SingleResult / StreamChunkEvent, ...)
-├── llm_tool.rs           # OpenAI-compatible client and SSE parser
 └── menu.rs               # Native menu: MENU_DEFS table, state linkage, in-place language update
+
+src-tauri/crates/llm-client/   # Reusable OpenAI-compatible client (standalone crate)
+├── README.md             # Usage guide: quick start / config / events / metrics / compatibility
+├── src/client.rs         # Request building, retries/backoff, cancellation, streaming adapter
+├── src/config.rs         # Client config (auth style / layered timeouts / proxy / custom headers)
+├── src/message.rs        # Message model (multimodal / tool calls / reasoning chain)
+├── src/params.rs         # Request params (sampling / tools / structured output / embeddings)
+├── src/response.rs       # Response model (usage details / timings / model list / embeddings)
+├── src/sse.rs            # SSE decoder (in-memory, no I/O, unit-testable)
+├── src/stream.rs         # Stream events, ChatStream, result accumulator
+├── src/metrics.rs        # TTFT / TPOT / ITL / token speed
+├── tests/mock_server.rs  # Local mock HTTP integration tests (no network)
+└── examples/             # Runnable chat / stream examples
 ```
+
+## 🧩 Reusable LLM Client (llm-client)
+
+OpenAI-compatible calls live in a standalone crate with no Tauri dependency, so other Rust projects can reuse them directly:
+
+```rust
+use llm_client::{ChatMessage, ChatParams, ClientConfig, LlmClient};
+
+let client = LlmClient::new(ClientConfig::new("https://api.deepseek.com/v1", "sk-xxx"))?;
+let params = ChatParams::new("deepseek-chat").with_temperature(0.2);
+let reply = client.chat(vec![ChatMessage::user("hello")], &params).await?;
+println!("{}", reply.content());
+```
+
+Covers: streaming and non-streaming calls, reasoning content, tool calling (including streaming delta
+accumulation), multimodal input, multiple choices, cancellation tokens, retries with backoff, layered
+timeouts (connect / response headers / stream idle), structured errors (status + business code +
+Retry-After), model listing and embeddings, plus TTFT / TPOT / ITL / tok-s metric helpers.
+
+The full API reference, config defaults, event semantics and vendor compatibility notes live in
+[crates/llm-client/README.md](src-tauri/crates/llm-client/README.md).
 
 ## 🧪 Testing
 
@@ -243,18 +278,18 @@ src-tauri/src/            # Backend (Rust)
 # Frontend type check
 npx tsc --noEmit
 
-# Backend unit tests (no network required)
-cd src-tauri && cargo test --lib
+# Backend unit tests + mock integration tests (no network)
+cd src-tauri && cargo test -p llm-client     # client: unit tests + local mock HTTP tests
+cargo test -p llmperf --lib                 # app-level unit tests
 
-# Live tests against a real API: export the env vars, then run manually
-# (covers streaming, reasoning models and the TPOT/ITL definition; ignored by default)
+# Live tests against a real API: export the env vars, then run
+# (skipped automatically when the env vars are absent)
 export LLMPERF_TEST_BASE_URL="http://127.0.0.1:16777/v1"
 export LLMPERF_TEST_API_KEY="sk-xxx"
 export LLMPERF_TEST_MODEL_CHAT="testllm-nk"
 export LLMPERF_TEST_MODEL_REASONER="testllm"
 
-cargo test --test llm_tool_integration   # client integration tests
-cargo test --lib -- --ignored            # metric definition live tests
+cargo test -p llm-client --test live_api    # live client tests (incl. TPOT/ITL definition)
 ```
 
 Without the environment variables the live tests skip instead of failing, keeping CI green.

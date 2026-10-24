@@ -5,15 +5,10 @@ use serde::{Deserialize, Serialize};
 /// 统计对象是「相邻两个流式增量到达的时间差」：服务端一个 SSE 分片可能包含多个 token，
 /// 因此该指标反映的是分片粒度下的出字节奏与卡顿，而不是严格的逐 token 延迟。
 /// 它比平均 tok/s 更能暴露「先快后卡」这类抖动问题。
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq)]
-pub struct ItlStats {
-    /// 分片间隔中位数（毫秒）
-    pub p50_ms: f64,
-    /// 分片间隔 P95（毫秒）
-    pub p95_ms: f64,
-    /// 分片间隔最大值（毫秒），用于定位偶发长卡顿
-    pub max_ms: f64,
-}
+///
+/// 定义与统计逻辑都在 `llm-client` crate 中，这里只做转导出，
+/// 保证前端 JSON 字段名（`p50_ms` / `p95_ms` / `max_ms`）不变。
+pub use llm_client::ItlStats;
 
 /// 单个窗口的最终请求结果
 #[derive(Serialize, Deserialize, Debug, Clone)]

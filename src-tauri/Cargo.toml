@@ -18,17 +18,20 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# 把 OpenAI 兼容客户端拆成独立 crate，便于其他项目复用
+[workspace]
+members = ["crates/llm-client"]
+resolver = "2"
+
 [dependencies]
 tauri = { version = "2", features = [] }
 # 打开外部链接 / 系统目录（帮助菜单与「打开下载目录」使用，仅 Rust 侧调用）
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["json", "stream"] }
-thiserror = "2"
-bytes = "1"
 tokio = { version = "1", features = ["full"] }
-futures-util = "0.3"
 tokio-util = "0.7"
 tauri-plugin-dialog = "2"
+# 通用 LLM 客户端（自带 reqwest / SSE 解析 / 指标计算）
+llm-client = { path = "crates/llm-client" }
 
