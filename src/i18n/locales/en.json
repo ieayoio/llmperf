@@ -4,6 +4,10 @@
   },
   "menu": {
     "app": "App",
+    "file": "File",
+    "run": "Run",
+    "view": "View",
+    "help": "Help",
     "about": "About LLMPerf...",
     "quit": "Quit",
     "hide": "Hide",
@@ -12,7 +16,26 @@
     "window": "Window",
     "minimize": "Minimize",
     "maximize": "Maximize",
-    "close": "Close Window"
+    "close": "Close Window",
+    "exportRun": "Export This Run (CSV)",
+    "exportSweep": "Export Sweep (CSV)",
+    "openDownloads": "Open Downloads Folder",
+    "send": "Send",
+    "cancelAll": "Cancel All",
+    "clear": "Clear",
+    "modeChat": "Chat Mode",
+    "modeSweep": "Sweep Mode",
+    "sweepStart": "Start Sweep",
+    "sweepStop": "Stop Sweep",
+    "zoomIn": "Zoom In",
+    "zoomOut": "Zoom Out",
+    "zoomReset": "Actual Size",
+    "fullscreen": "Toggle Fullscreen",
+    "reload": "Reload Interface",
+    "devtools": "Developer Tools",
+    "shortcuts": "Keyboard Shortcuts",
+    "homepage": "Project Homepage",
+    "docs": "Usage Docs"
   },
   "config": {
     "baseURL": "Base URL",
@@ -122,6 +145,11 @@
     "versionLabel": "Version",
     "version": "{0}",
     "ok": "OK"
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "hint": "These shortcuts work anywhere in the app",
+    "close": "Close"
   },
   "language": {
     "label": "Language",

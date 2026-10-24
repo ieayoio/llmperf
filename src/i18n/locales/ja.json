@@ -4,6 +4,10 @@
   },
   "menu": {
     "app": "アプリ",
+    "file": "ファイル",
+    "run": "実行",
+    "view": "表示",
+    "help": "ヘルプ",
     "about": "LLMPerf について...",
     "quit": "終了",
     "hide": "非表示",
@@ -12,7 +16,26 @@
     "window": "ウィンドウ",
     "minimize": "最小化",
     "maximize": "最大化",
-    "close": "ウィンドウを閉じる"
+    "close": "ウィンドウを閉じる",
+    "exportRun": "今回の結果を CSV 出力",
+    "exportSweep": "スイープ結果を CSV 出力",
+    "openDownloads": "ダウンロードフォルダを開く",
+    "send": "送信",
+    "cancelAll": "すべてキャンセル",
+    "clear": "クリア",
+    "modeChat": "対話モード",
+    "modeSweep": "スイープモード",
+    "sweepStart": "スイープ開始",
+    "sweepStop": "スイープ停止",
+    "zoomIn": "拡大",
+    "zoomOut": "縮小",
+    "zoomReset": "実際のサイズ",
+    "fullscreen": "全画面切替",
+    "reload": "画面を再読み込み",
+    "devtools": "開発者ツール",
+    "shortcuts": "ショートカット一覧",
+    "homepage": "プロジェクトページ",
+    "docs": "使い方ドキュメント"
   },
   "config": {
     "baseURL": "Base URL",
@@ -122,6 +145,11 @@
     "versionLabel": "バージョン",
     "version": "{0}",
     "ok": "OK"
+  },
+  "shortcuts": {
+    "title": "ショートカット一覧",
+    "hint": "以下のショートカットはアプリ内のどこでも有効です",
+    "close": "閉じる"
   },
   "language": {
     "label": "言語",

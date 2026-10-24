@@ -10,9 +10,10 @@
 |------|------|
 | `src/i18n/locales/*.json` | 唯一的翻译来源，前端界面与 Rust 原生菜单都从这里取文本 |
 | `src/i18n/index.ts` | 前端加载语言包、`t()` 翻译函数、持久化到 `localStorage` |
-| `src-tauri/src/menu.rs` | 编译期用 `include_str!` 嵌入同一批 JSON，动态生成本地菜单 |
+| `src-tauri/src/menu.rs` | 编译期用 `include_str!` 嵌入同一批 JSON，按 `MENU_DEFS` 表生成原生菜单 |
 
-因为菜单项是**按 `LANGS` 数组动态生成**的，新增语言不需要逐个手写菜单项。
+因为菜单项是**表驱动**的（`LANGS` 生成语言项，`MENU_DEFS` 生成其余菜单项），
+新增语言不需要逐个手写菜单项；切换语言时只就地更新文本，不会重建菜单。
 
 ## 三步添加语言
 
@@ -82,13 +83,27 @@ fn locale_json(lang: &str) -> &'static str {
 }
 ```
 
-菜单项 ID 约定为 `lang-<语言代码>`。`src-tauri/src/lib.rs` 的菜单事件分发需要补一行：
+菜单项 ID 约定为 `lang-<语言代码>`，而 `src-tauri/src/lib.rs` 的事件分发按 `lang-` 前缀匹配，
+因此**不需要改 lib.rs**。
 
-```rust
-"lang-xx" => switch_lang(app, "xx"),
-```
+至此完成。勾选状态、菜单文本就地更新、前端切换都由现有逻辑自动处理。
 
-至此完成。勾选状态、菜单文本重建、前端切换都由现有逻辑自动处理。
+## 新增或调整菜单项
+
+菜单项集中定义在 `src-tauri/src/menu.rs` 的 `MENU_DEFS` 表里（ID / 语言包 key / 快捷键 / 是否可勾选）
+，同时兼作「帮助 → 快捷键一览」弹窗的数据源：
+
+1. 在 `MENU_DEFS` 加一行：`item("run-foo", "foo", Some("CmdOrCtrl+F"))`，并在对应子菜单装配处引用该 ID；
+2. 在全部语言包的 `menu` 区块补上 `"foo": "..."`；
+3. 动作分发：
+   - 后端能独立完成的（窗口、缩放、打开链接等）在 `lib.rs` 的 `on_menu_event` 里加分支；
+   - 依赖界面状态的（发送、导出、切模式等）在前端 `App.tsx` 的 `menuActionsRef` 里加映射，
+     后端会自动把它转成 `menu-command` 事件。
+
+菜单项可用性由前端通过 `set_menu_state` 推送（发送中、扫描中、有无结果），
+需要在 `menu.rs` 的 `enabled_map` 里补充规则。
+
+`cargo test` 会校验语言包是否漏翻、菜单 ID 与快捷键是否重复。
 
 ## 校验
 
@@ -136,6 +151,6 @@ src/i18n/
     └── ko.json           # 한국어   ← 新增语言按此格式添加
 
 src-tauri/src/
-├── menu.rs               # LANGS + locale_json + 动态菜单构建
-└── lib.rs                # 菜单事件 → 通知前端切换
+├── menu.rs               # MENU_DEFS 菜单表 + LANGS + 语言项生成
+└── lib.rs                # 菜单事件分发（后端动作 / 转发前端）
 ```

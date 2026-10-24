@@ -6,13 +6,52 @@ mod cancel;
 mod llm_tool;
 mod menu;
 
+use std::sync::Mutex;
+
 use tauri::{Emitter, Manager, Runtime};
+use tauri_plugin_opener::OpenerExt;
 
 pub use types::{SingleResult, StreamChunkEvent, LLMRequestConfig};
 pub use llm_tool::{
     ChatCompletion, ChatMessage, ChatParams, ClientConfig, LlmClient, LlmError, Role,
     StreamAccumulator, StreamEvent, Timings,
 };
+
+/// 帮助菜单使用的固定链接
+///
+/// 写成编译期常量而不是从前端接收 URL，避免被利用打开任意链接。
+const URL_HOMEPAGE: &str = "https://github.com/ieayoio/llmperf";
+const URL_DOCS: &str = "https://github.com/ieayoio/llmperf/blob/main/README.md";
+
+/// 缩放步进与上下限（百分比）
+const ZOOM_STEP: i32 = 10;
+const ZOOM_MIN: u16 = 50;
+const ZOOM_MAX: u16 = 200;
+const ZOOM_DEFAULT: u16 = 100;
+
+/// 当前缩放比例（百分比）
+///
+/// 多个 webview 共用同一档位，因此单独存一份状态，
+/// 避免每次点「放大」都要从窗口读取（平台支持程度不一致）。
+struct ZoomState(Mutex<u16>);
+
+impl ZoomState {
+    fn new() -> Self {
+        Self(Mutex::new(ZOOM_DEFAULT))
+    }
+}
+
+/// 最近一次由前端同步过来的界面状态
+///
+/// 模式项是可勾选菜单项，点击时系统会自动翻转勾选；
+/// 若点的恰好是当前模式，前端状态不会变化，这时就要用这份快照把勾选纠正回来。
+struct LatestMenuState(Mutex<Option<menu::MenuState>>);
+
+impl LatestMenuState {
+    fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+}
 
 /// Tauri 命令：设置初始语言（用于把 localStorage 中的语言同步到菜单栏）
 ///
@@ -60,6 +99,28 @@ async fn cancel_request(app: tauri::AppHandle, window_id: usize) -> bool {
 #[tauri::command]
 async fn cancel_all_requests(app: tauri::AppHandle) -> Vec<usize> {
     app.state::<cancel::CancelRegistry>().cancel_all().await
+}
+
+/// Tauri 命令：把界面状态同步到原生菜单
+///
+/// 前端在模式、发送状态、结果数量变化时推送，菜单据此启用/禁用与勾选，
+/// 避免出现「点了没反应」或「能点到不该点的项」。
+#[tauri::command]
+fn set_menu_state(app: tauri::AppHandle, state: menu::MenuState) {
+    app.state::<menu::MenuHandle<tauri::Wry>>().apply_state(&state);
+
+    // 留一份快照，供菜单点击后纠正自动翻转的勾选（见 resync_menu_state）
+    if let Ok(mut latest) = app.state::<LatestMenuState>().0.lock() {
+        *latest = Some(state);
+    }
+}
+
+/// Tauri 命令：取「快捷键一览」数据
+///
+/// 快捷键表的唯一来源在 menu.rs，前端只负责渲染，避免两边各写一份导致不一致。
+#[tauri::command]
+fn get_menu_shortcuts() -> Vec<menu::Shortcut> {
+    menu::shortcuts()
 }
 
 /// 校验导出文件名：只允许纯文件名
@@ -154,6 +215,112 @@ fn close_all_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
     });
 }
 
+/// 切换所有窗口的全屏状态
+///
+/// 以任一窗口当前状态取反作为目标状态，保证多窗口表现一致。
+fn toggle_fullscreen_all_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let target = !app
+        .webview_windows()
+        .values()
+        .next()
+        .and_then(|w| w.is_fullscreen().ok())
+        .unwrap_or(false);
+    for_each_window(app, |w| {
+        let _ = w.set_fullscreen(target);
+    });
+}
+
+/// 把百分比缩放应用到所有窗口
+fn apply_zoom<R: Runtime>(app: &tauri::AppHandle<R>, percent: u16) {
+    for_each_window(app, |w| {
+        // set_zoom 接收倍数，1.0 表示 100%；不支持的平台忽略失败
+        let _ = w.set_zoom(f64::from(percent) / 100.0);
+    });
+}
+
+/// 在当前缩放下加减一档，并限制在 [ZOOM_MIN, ZOOM_MAX]
+fn zoom_step<R: Runtime>(app: &tauri::AppHandle<R>, delta: i32) {
+    let state = app.state::<ZoomState>();
+    let next = {
+        // 锁被毒化时放弃本次缩放，不影响其他功能
+        let Ok(mut percent) = state.0.lock() else {
+            return;
+        };
+        *percent = (*percent as i32 + delta).clamp(ZOOM_MIN as i32, ZOOM_MAX as i32) as u16;
+        *percent
+    };
+    apply_zoom(app, next);
+}
+
+/// 缩放恢复到 100%
+fn zoom_reset<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let state = app.state::<ZoomState>();
+    if let Ok(mut percent) = state.0.lock() {
+        *percent = ZOOM_DEFAULT;
+    }
+    apply_zoom(app, ZOOM_DEFAULT);
+}
+
+/// 重新加载界面（仅 debug 构建提供，release 下会丢失测试结果）
+#[cfg(debug_assertions)]
+fn reload_all_windows<R: Runtime>(app: &tauri::AppHandle<R>) {
+    for_each_window(app, |w| {
+        let _ = w.reload();
+    });
+}
+
+/// 打开开发者工具（仅 debug 构建提供）
+#[cfg(debug_assertions)]
+fn open_devtools<R: Runtime>(app: &tauri::AppHandle<R>) {
+    for_each_window(app, |w| w.open_devtools());
+}
+
+/// 用系统默认程序打开外部链接（失败只记录日志，不打断应用）
+fn open_url<R: Runtime>(app: &tauri::AppHandle<R>, url: &str) {
+    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+        eprintln!("[llmperf] 打开链接失败 {url}: {e}");
+    }
+}
+
+/// 打开系统下载目录（导出文件默认落在这里）
+fn open_download_dir<R: Runtime>(app: &tauri::AppHandle<R>) {
+    match app.path().download_dir() {
+        Ok(dir) => {
+            // 目录不存在时先创建，避免打开失败
+            let _ = std::fs::create_dir_all(&dir);
+            if let Err(e) = app.opener().open_path(dir.display().to_string(), None::<&str>) {
+                eprintln!("[llmperf] 打开下载目录失败: {e}");
+            }
+        }
+        Err(e) => eprintln!("[llmperf] 无法定位下载目录: {e}"),
+    }
+}
+
+/// 把动作转发给前端执行
+///
+/// 发送、取消、切模式、导出等动作的最终状态都在 React 里，
+/// 后端只负责把菜单点击统一转成 `menu-command` 事件。
+fn forward_to_frontend<R: Runtime>(app: &tauri::AppHandle<R>, command: &str) {
+    for_each_window(app, |w| {
+        let _ = w.emit("menu-command", command);
+    });
+}
+
+/// 用最近一次界面状态重刷菜单
+///
+/// 可勾选的模式项被点击时，系统会无条件翻转勾选；
+/// 若点的就是当前模式，前端不会重推状态，菜单就会多出一个错误的对勾。
+fn resync_menu_state<R: Runtime>(app: &tauri::AppHandle<R>) {
+    let holder = app.state::<LatestMenuState>();
+    let latest = match holder.0.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => None,
+    };
+    if let Some(state) = latest {
+        app.state::<menu::MenuHandle<R>>().apply_state(&state);
+    }
+}
+
 /// 显示关于对话框（通过事件通知前端）
 fn show_about<R: Runtime>(app: &tauri::AppHandle<R>) {
     for_each_window(app, |w| {
@@ -164,6 +331,9 @@ fn show_about<R: Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 打开链接/目录插件：只在 Rust 侧调用，关闭对 <a target=_blank> 的 JS 注入
+        // （前端不使用该插件的 JS API，因此无需额外的 capability 权限）
+        .plugin(tauri_plugin_opener::Builder::new().open_js_links_on_click(false).build())
         // 注册取消注册表（按 window_id 管理 CancellationToken）
         .manage(cancel::CancelRegistry::new())
         .invoke_handler(tauri::generate_handler![
@@ -172,6 +342,8 @@ pub fn run() {
             cancel_request,
             cancel_all_requests,
             save_text_file,
+            set_menu_state,
+            get_menu_shortcuts,
         ])
         // 创建原生菜单栏 + 菜单事件处理
         .setup(|app| {
@@ -181,27 +353,39 @@ pub fn run() {
 
             // 菜单句柄只注册一次：切换语言时就地改文本，不重建菜单
             app.manage(menu_handle);
+            // 缩放比例：所有窗口共享同一档位
+            app.manage(ZoomState::new());
+            // 最近一次界面状态：用于菜单点击后纠正勾选
+            app.manage(LatestMenuState::new());
 
-            // 注册菜单事件处理器：处理语言切换 + 窗口操作
+            // 注册菜单事件处理器：后端直接能做的就地执行，其余转发给前端
             app.on_menu_event(move |app, event| {
                 let id = event.id();
 
-                match id.as_ref() {
-                    // === 语言切换：ID 约定为 `lang-<语言代码>`，与 menu.rs 保持一致 ===
-                    "lang-zh-SC" => switch_lang(app, "zh-SC"),
-                    "lang-zh-TC" => switch_lang(app, "zh-TC"),
-                    "lang-en" => switch_lang(app, "en"),
-                    "lang-ja" => switch_lang(app, "ja"),
-                    "lang-ko" => switch_lang(app, "ko"),
+                // 语言项：ID 约定为 `lang-<语言代码>`，新增语言无需改这里
+                if let Some(code) = id.as_ref().strip_prefix("lang-") {
+                    switch_lang(app, code);
+                    return;
+                }
 
-                    // === 应用菜单 ===
+                match id.as_ref() {
+                    // === 后端直接执行的动作 ===
                     "about" => show_about(app),
                     "quit" => quit_app(app),
-
-                    // === 窗口操作 ===
                     "win-minimize" => minimize_all_windows(app),
                     "win-maximize" => toggle_maximize_all_windows(app),
                     "win-close" => close_all_windows(app),
+                    "view-fullscreen" => toggle_fullscreen_all_windows(app),
+                    "view-zoom-in" => zoom_step(app, ZOOM_STEP),
+                    "view-zoom-out" => zoom_step(app, -ZOOM_STEP),
+                    "view-zoom-reset" => zoom_reset(app),
+                    "file-open-downloads" => open_download_dir(app),
+                    "help-homepage" => open_url(app, URL_HOMEPAGE),
+                    "help-docs" => open_url(app, URL_DOCS),
+                    #[cfg(debug_assertions)]
+                    "view-reload" => reload_all_windows(app),
+                    #[cfg(debug_assertions)]
+                    "view-devtools" => open_devtools(app),
 
                     // === macOS 专属 ===
                     #[cfg(target_os = "macos")]
@@ -215,8 +399,14 @@ pub fn run() {
                         let _ = app.hide_other();
                     }
 
-                    // 未知 ID：忽略
-                    _ => {}
+                    // === 其余动作交给前端（发送、取消、切模式、导出等） ===
+                    other => {
+                        // 模式项的勾选先按当前真实状态纠正，避免出现两个对勾或没有对勾
+                        if other.starts_with("run-mode-") {
+                            resync_menu_state(app);
+                        }
+                        forward_to_frontend(app, other);
+                    }
                 }
             });
 

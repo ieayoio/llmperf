@@ -4,6 +4,10 @@
   },
   "menu": {
     "app": "应用",
+    "file": "文件",
+    "run": "运行",
+    "view": "视图",
+    "help": "帮助",
     "about": "关于 LLMPerf...",
     "quit": "退出",
     "hide": "隐藏",
@@ -12,7 +16,26 @@
     "window": "窗口",
     "minimize": "最小化",
     "maximize": "最大化",
-    "close": "关闭窗口"
+    "close": "关闭窗口",
+    "exportRun": "导出本轮 CSV",
+    "exportSweep": "导出扫描 CSV",
+    "openDownloads": "打开下载目录",
+    "send": "发送",
+    "cancelAll": "全部取消",
+    "clear": "清空",
+    "modeChat": "对话模式",
+    "modeSweep": "梯度扫描",
+    "sweepStart": "开始扫描",
+    "sweepStop": "停止扫描",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "zoomReset": "实际大小",
+    "fullscreen": "切换全屏",
+    "reload": "重新加载界面",
+    "devtools": "开发者工具",
+    "shortcuts": "快捷键一览",
+    "homepage": "项目主页",
+    "docs": "使用文档"
   },
   "config": {
     "baseURL": "Base URL",
@@ -122,6 +145,11 @@
     "versionLabel": "版本",
     "version": "{0}",
     "ok": "确定"
+  },
+  "shortcuts": {
+    "title": "快捷键一览",
+    "hint": "以下快捷键在应用内任意位置生效",
+    "close": "关闭"
   },
   "language": {
     "label": "语言",

@@ -4,6 +4,10 @@
   },
   "menu": {
     "app": "앱",
+    "file": "파일",
+    "run": "실행",
+    "view": "보기",
+    "help": "도움말",
     "about": "LLMPerf 정보...",
     "quit": "종료",
     "hide": "가리기",
@@ -12,7 +16,26 @@
     "window": "윈도우",
     "minimize": "최소화",
     "maximize": "최대화",
-    "close": "창 닫기"
+    "close": "창 닫기",
+    "exportRun": "이번 결과 CSV 내보내기",
+    "exportSweep": "스윕 결과 CSV 내보내기",
+    "openDownloads": "다운로드 폴더 열기",
+    "send": "보내기",
+    "cancelAll": "전체 취소",
+    "clear": "비우기",
+    "modeChat": "대화 모드",
+    "modeSweep": "스윕 모드",
+    "sweepStart": "스윕 시작",
+    "sweepStop": "스윕 중지",
+    "zoomIn": "확대",
+    "zoomOut": "축소",
+    "zoomReset": "실제 크기",
+    "fullscreen": "전체 화면 전환",
+    "reload": "화면 다시 로드",
+    "devtools": "개발자 도구",
+    "shortcuts": "키보드 단축키",
+    "homepage": "프로젝트 홈페이지",
+    "docs": "사용 문서"
   },
   "config": {
     "baseURL": "Base URL",
@@ -122,6 +145,11 @@
     "versionLabel": "버전",
     "version": "{0}",
     "ok": "확인"
+  },
+  "shortcuts": {
+    "title": "키보드 단축키",
+    "hint": "아래 단축키는 앱 어디에서든 동작합니다",
+    "close": "닫기"
   },
   "language": {
     "label": "언어",

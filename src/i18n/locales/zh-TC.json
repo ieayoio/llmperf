@@ -4,6 +4,10 @@
   },
   "menu": {
     "app": "應用程式",
+    "file": "檔案",
+    "run": "執行",
+    "view": "檢視",
+    "help": "說明",
     "about": "關於 LLMPerf...",
     "quit": "離開",
     "hide": "隱藏",
@@ -12,7 +16,26 @@
     "window": "視窗",
     "minimize": "最小化",
     "maximize": "最大化",
-    "close": "關閉視窗"
+    "close": "關閉視窗",
+    "exportRun": "匯出本輪 CSV",
+    "exportSweep": "匯出掃描 CSV",
+    "openDownloads": "開啟下載目錄",
+    "send": "傳送",
+    "cancelAll": "全部取消",
+    "clear": "清空",
+    "modeChat": "對話模式",
+    "modeSweep": "梯度掃描",
+    "sweepStart": "開始掃描",
+    "sweepStop": "停止掃描",
+    "zoomIn": "放大",
+    "zoomOut": "縮小",
+    "zoomReset": "實際大小",
+    "fullscreen": "切換全螢幕",
+    "reload": "重新載入介面",
+    "devtools": "開發者工具",
+    "shortcuts": "快速鍵一覽",
+    "homepage": "專案首頁",
+    "docs": "使用文件"
   },
   "config": {
     "baseURL": "Base URL",
@@ -122,6 +145,11 @@
     "versionLabel": "版本",
     "version": "{0}",
     "ok": "確定"
+  },
+  "shortcuts": {
+    "title": "快速鍵一覽",
+    "hint": "以下快速鍵在應用程式內任意位置生效",
+    "close": "關閉"
   },
   "language": {
     "label": "語言",

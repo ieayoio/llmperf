@@ -601,6 +601,54 @@ html, body, #root {
   justify-content: flex-end;
 }
 
+/* ====== 快捷键一览 ====== */
+/* 条数较多时在弹窗内滚动，避免撑出屏幕 */
+.shortcut-body {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.shortcut-hint {
+  font-size: 12px;
+  color: #a1a1aa;
+  margin-bottom: 10px;
+}
+
+.shortcut-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.shortcut-table td {
+  padding: 5px 0;
+  border-bottom: 1px solid #26262e;
+}
+
+.shortcut-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* 快捷键靠右并排展示，便于快速扫读 */
+.shortcut-accel {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  background: #26262e;
+  color: #e4e4e7;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+}
+
 /* ====== 标题行 + 模式切换 ====== */
 .config-header {
   display: flex;

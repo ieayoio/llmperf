@@ -100,6 +100,47 @@ interface StreamChunkPayload {
 const MAX_SWEEP_LEVELS = 8;
 
 /**
+ * 是否为 macOS
+ *
+ * 菜单快捷键统一用 `CmdOrCtrl` 描述，展示时需要展开成平台对应的按键名。
+ */
+const IS_MAC = navigator.userAgent.includes("Mac");
+
+/** 「快捷键一览」中的一行（来自后端菜单定义） */
+interface MenuShortcut {
+  /** 菜单项 ID */
+  id: string;
+  /** 语言包 menu 区块下的 key，用于取显示名 */
+  key: string;
+  /** 后端快捷键字符串，如 "CmdOrCtrl+E" */
+  accel: string;
+}
+
+/**
+ * 把后端快捷键字符串拆成按键列表
+ *
+ * `CmdOrCtrl` 按平台展开成 ⌘ / Ctrl，并把多字符主键统一大写，视觉上更接近键帽。
+ */
+function formatAccel(accel: string): string[] {
+  const parts = accel.split("+").map((part) => {
+    switch (part) {
+      case "CmdOrCtrl":
+        return IS_MAC ? "⌘" : "Ctrl";
+      case "Ctrl":
+        return IS_MAC ? "⌃" : "Ctrl";
+      case "Shift":
+        return IS_MAC ? "⇧" : "Shift";
+      case "Alt":
+        return IS_MAC ? "⌥" : "Alt";
+      default:
+        return part;
+    }
+  });
+  const mainKey = parts.pop() ?? "";
+  return [...parts, mainKey.length > 1 ? mainKey.toUpperCase() : mainKey];
+}
+
+/**
  * 扫描模式使用的 window_id 基址
  *
  * 与对话窗口（0 起）隔离，避免互相覆盖后端取消注册表里的 token，
@@ -184,6 +225,9 @@ function App() {
   // 监听关于对话框事件：弹出应用内模态框（不用 alert()，避免 Tauri WebView 在
   // 系统对话框上追加 dev 服务器 URL，导致即使 release 也会显示 localhost 行）
   const [showAbout, setShowAbout] = useState(false);
+  // 快捷键一览弹窗：行数据由后端菜单定义提供，避免前后端各写一份快捷键表
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [shortcutRows, setShortcutRows] = useState<MenuShortcut[]>([]);
   useEffect(() => {
     const unlisten = listen<void>("menu-about", () => {
       setShowAbout(true);
@@ -191,6 +235,13 @@ function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
+  }, []);
+
+  // 读取「快捷键一览」数据（后端是快捷键表的唯一来源）
+  useEffect(() => {
+    invoke<MenuShortcut[]>("get_menu_shortcuts")
+      .then(setShortcutRows)
+      .catch((e) => console.warn("[llmperf] 读取快捷键失败:", e));
   }, []);
 
   // 监听流式事件
@@ -441,6 +492,13 @@ function App() {
     );
   };
 
+  /** 清空梯度扫描的结果与提示 */
+  const clearSweepResults = () => {
+    setSweepPoints([]);
+    setSweepError("");
+    setSweepExportHint("");
+  };
+
   /** 取消指定窗口的后端请求；后端会发出 finished + 用户已取消 事件，状态由事件统一收敛 */
   const cancelWindow = async (windowId: number) => {
     try {
@@ -585,6 +643,55 @@ function App() {
 
   /** 当前是否有窗口正在发送，用于控制"全部取消"按钮的可用性 */
   const anySending = windows.some((w) => w.status === "sending");
+
+  /**
+   * 菜单命令 → 界面动作的映射表
+   *
+   * 用 ref 持有最新一版回调：监听只注册一次，但每次渲染都要用到
+   * 当前的 mode / lastRun 等状态，否则会执行到过期的闭包。
+   */
+  const menuActionsRef = useRef<Record<string, () => void>>({});
+  menuActionsRef.current = {
+    "run-send": handleSend,
+    "run-cancel-all": cancelAll,
+    // 清空按当前模式区分：对话模式清窗口与汇总，扫描模式清扫描结果
+    "run-clear": () => (mode === "chat" ? clearAllWindows() : clearSweepResults()),
+    "run-mode-chat": () => setMode("chat"),
+    "run-mode-sweep": () => setMode("sweep"),
+    "run-sweep-start": runSweep,
+    "run-sweep-stop": stopSweep,
+    "file-export-run": exportCsv,
+    "file-export-sweep": exportSweepCsv,
+    "help-shortcuts": () => setShowShortcuts(true),
+  };
+
+  // 监听原生菜单转发的命令事件（后端只转发 ID，具体动作由这里执行）
+  useEffect(() => {
+    const unlisten = listen<string>("menu-command", (event) => {
+      // 未映射的 ID 直接忽略，便于后续版本新增菜单项而不必改动开关
+      menuActionsRef.current[event.payload]?.();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  /**
+   * 把界面状态同步给原生菜单
+   *
+   * 依赖项只取布尔值，避免每个流式分片都触发一次 invoke。
+   */
+  useEffect(() => {
+    invoke<void>("set_menu_state", {
+      state: {
+        mode,
+        sending: anySending,
+        sweep_running: sweepRunning,
+        has_run: lastRun !== null,
+        has_sweep: sweepPoints.length > 0,
+      },
+    }).catch((e) => console.warn("[llmperf] 同步菜单状态失败:", e));
+  }, [mode, anySending, sweepRunning, lastRun, sweepPoints]);
 
   return (
     <div className="app-container">
@@ -773,11 +880,7 @@ function App() {
               </button>
               <button
                 className="btn btn-secondary"
-                onClick={() => {
-                  setSweepPoints([]);
-                  setSweepError("");
-                  setSweepExportHint("");
-                }}
+                onClick={clearSweepResults}
                 disabled={sweepRunning}
               >
                 {t("config.clear")}
@@ -888,6 +991,48 @@ function App() {
                 autoFocus
               >
                 {t("about.ok")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 快捷键一览：数据来自后端菜单定义，切换语言后文案随 t() 自动更新 */}
+      {showShortcuts && (
+        <div className="modal-backdrop" onClick={() => setShowShortcuts(false)}>
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="modal-title">{t("shortcuts.title")}</h2>
+            <div className="modal-body shortcut-body">
+              <p className="shortcut-hint">{t("shortcuts.hint")}</p>
+              <table className="shortcut-table">
+                <tbody>
+                  {shortcutRows.map((row) => (
+                    <tr key={row.id}>
+                      <td>{t(`menu.${row.key}`)}</td>
+                      <td className="shortcut-accel">
+                        {formatAccel(row.accel).map((key, i) => (
+                          <kbd className="kbd" key={`${row.id}-${i}`}>
+                            {key}
+                          </kbd>
+                        ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="modal-actions">
+              <button
+                className="btn btn-primary"
+                onClick={() => setShowShortcuts(false)}
+                autoFocus
+              >
+                {t("shortcuts.close")}
               </button>
             </div>
           </div>
