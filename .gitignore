@@ -15,7 +15,8 @@ dist-ssr
 # Tauri
 target
 src-tauri/target
-src-tauri/Cargo.lock
+# Cargo.lock 需要纳入版本管理：桌面应用依赖精确锁定，
+# 否则不同机器会解析出不同的 tauri 版本，与 npm 侧 @tauri-apps/api 对不齐
 
 # Editor directories and files
 .vscode/*
