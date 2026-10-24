@@ -7,6 +7,30 @@
   color: #e4e4e7;
   background-color: #0f0f12;
 
+  /* ====== 设计变量 ======
+     集中定义取色与圆角，避免各处再写近似值，导致边框、底色逐渐跑偏 */
+  --bg-surface-1: #14141a;      /* 一级表面：面板、输入框、对话窗口 */
+  --bg-surface-2: #1c1c24;      /* 二级表面：表头、指标条、次级按钮 */
+  --bg-bubble: #1b1b22;         /* 助手消息气泡 */
+  --border: #2a2a35;            /* 主边框 */
+  --border-subtle: #23232c;     /* 分隔线、网格线 */
+  --border-strong: #3f3f4a;     /* hover 描边、按键边框 */
+  --text: #e4e4e7;
+  --text-muted: #9ca3af;
+  --text-dim: #6b7280;
+  --accent: #7c3aed;
+  --accent-strong: #6d28d9;
+  --accent-deep: #5b21b6;
+  --accent-soft: #a78bfa;
+  /* 状态色：发送中 / 完成 / 错误 / 取消 */
+  --status-sending: #f59e0b;
+  --status-done: #22c55e;
+  --status-error: #ef4444;
+  --status-canceled: #94a3b8;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -32,15 +56,6 @@ html, body, #root {
   gap: 0;
 }
 
-/* ====== 顶部菜单栏 ====== */
-.top-menu {
-  display: flex;
-  align-items: center;
-  padding: 6px 0;
-  flex-shrink: 0;
-  gap: 8px;
-}
-
 /* ====== 配置面板 ====== */
 .config-panel {
   background: transparent;
@@ -54,7 +69,7 @@ html, body, #root {
   font-size: 18px;
   font-weight: 700;
   margin-bottom: 14px;
-  color: #a78bfa;
+  color: var(--accent-soft);
   letter-spacing: -0.02em;
 }
 
@@ -77,17 +92,17 @@ html, body, #root {
 
 .config-field label {
   font-size: 12px;
-  color: #888;
+  color: var(--text-muted);
   font-weight: 500;
 }
 
 .config-field input {
   height: 34px;
   padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid #2a2a35;
-  background: #121216;
-  color: #e4e4e7;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface-1);
+  color: var(--text);
   font-size: 13px;
   outline: none;
   transition: border-color 0.2s;
@@ -95,7 +110,7 @@ html, body, #root {
 }
 
 .config-field input:focus {
-  border-color: #7c3aed;
+  border-color: var(--accent);
 }
 
 .config-field.flex-1 {
@@ -115,7 +130,7 @@ html, body, #root {
 .btn {
   height: 34px;
   padding: 0 16px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   font-size: 13px;
   font-weight: 600;
@@ -125,28 +140,28 @@ html, body, #root {
 }
 
 .btn-primary {
-  background: #7c3aed;
+  background: var(--accent);
   color: #fff;
-  border-color: #7c3aed;
+  border-color: var(--accent);
 }
 
 .btn-primary:hover {
-  background: #6d28d9;
+  background: var(--accent-strong);
 }
 
 .btn-primary:active {
-  background: #5b21b6;
+  background: var(--accent-deep);
 }
 
 .btn-secondary {
-  background: #1e1e24;
-  color: #888;
-  border-color: #2a2a35;
+  background: var(--bg-surface-2);
+  color: var(--text-muted);
+  border-color: var(--border);
 }
 
 .btn-secondary:hover {
-  color: #ccc;
-  border-color: #444;
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 
 /* 取消按钮（危险操作）：红色边框 + 红色文字，hover 时填充背景 */
@@ -171,9 +186,9 @@ html, body, #root {
   flex-shrink: 0;
   margin: 0 12px 10px 12px;
   padding: 8px 12px;
-  border: 1px solid #2a2a35;
-  border-radius: 8px;
-  background: #121216;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-1);
 }
 
 .summary-header {
@@ -186,14 +201,14 @@ html, body, #root {
 .summary-title {
   font-size: 13px;
   font-weight: 600;
-  color: #a78bfa;
+  color: var(--accent-soft);
   white-space: nowrap;
 }
 
 .summary-meta {
   flex: 1;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -215,28 +230,28 @@ html, body, #root {
 .summary-table th {
   text-align: right;
   font-weight: 500;
-  color: #6b7280;
+  color: var(--text-dim);
   padding: 3px 8px;
-  border-bottom: 1px solid #2a2a35;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .summary-table th:first-child,
 .summary-table td:first-child {
   text-align: left;
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 .summary-table td {
   text-align: right;
   padding: 3px 8px;
-  color: #e4e4e7;
+  color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
 .summary-hint {
   margin-top: 6px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-dim);
   word-break: break-all;
 }
 
@@ -244,9 +259,26 @@ html, body, #root {
 .chat-grid {
   display: grid;
   flex: 1;
-  gap: 10px;
+  /* 间距与配置栏、汇总面板保持同一节奏 */
+  gap: 12px;
+  /* 与配置栏、汇总面板对齐：左右各留 12px、底部留白，不让窗口顶到窗体边缘 */
+  padding: 0 12px 12px 12px;
   overflow-y: auto;
   min-height: 0;
+}
+
+/* 窗口很多时网格自身会滚动，滚动条风格与消息区保持一致 */
+.chat-grid::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.chat-grid::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .chat-grid.cols-1 { grid-template-columns: 1fr; }
@@ -263,30 +295,47 @@ html, body, #root {
 .chat-window {
   display: flex;
   flex-direction: column;
-  background: #16161c;
-  border: 1px solid #2a2a35;
-  border-radius: 8px;
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  transition: border-color 0.3s;
+  transition: border-color 0.3s, background 0.3s;
   /* 最小高度：防止高并发时窗口被网格压没 */
   min-height: 180px;
 }
 
-.chat-window.status-sending,
-.chat-window.status-streaming {
-  border-color: #f59e0b;
+/* 状态提示做得克制一些：边框取低透明度状态色，头部再叠一层极淡底色。
+   否则几十路并发时满屏高饱和描边会盖过内容本身 */
+.chat-window.status-sending {
+  border-color: rgba(245, 158, 11, 0.45);
 }
 
 .chat-window.status-done {
-  border-color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.35);
 }
 
 .chat-window.status-error {
-  border-color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.45);
 }
 
 .chat-window.status-canceled {
-  border-color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+.chat-window.status-sending .chat-header {
+  background: rgba(245, 158, 11, 0.07);
+}
+
+.chat-window.status-done .chat-header {
+  background: rgba(34, 197, 94, 0.06);
+}
+
+.chat-window.status-error .chat-header {
+  background: rgba(239, 68, 68, 0.07);
+}
+
+.chat-window.status-canceled .chat-header {
+  background: rgba(148, 163, 184, 0.05);
 }
 
 .chat-header {
@@ -294,37 +343,50 @@ html, body, #root {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background: #1e1e26;
-  border-bottom: 1px solid #2a2a35;
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
 .chat-window-title {
   font-weight: 600;
   font-size: 13px;
-  color: #a78bfa;
+  color: var(--accent-soft);
 }
 
 .chat-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
-  color: #666;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
-.chat-window.status-sending .chat-status,
-.chat-window.status-streaming .chat-status {
-  color: #f59e0b;
+/* 状态圆点：颜色跟随当前状态色，多窗口并排时一眼分辨状态 */
+.chat-status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.chat-window.status-sending .chat-status {
+  color: var(--status-sending);
 }
 
 .chat-window.status-done .chat-status {
-  color: #22c55e;
+  color: var(--status-done);
 }
 
 .chat-window.status-error .chat-status {
-  color: #ef4444;
+  color: var(--status-error);
 }
 
 .chat-window.status-canceled .chat-status {
-  color: #94a3b8;
+  color: var(--status-canceled);
 }
 
 /* 聊天窗口头部右侧：状态文字 + 取消按钮并排 */
@@ -341,16 +403,16 @@ html, body, #root {
   font-size: 11px;
   font-weight: 600;
   border-radius: 4px;
-  border: 1px solid #ef4444;
+  border: 1px solid var(--status-error);
   background: transparent;
-  color: #ef4444;
+  color: var(--status-error);
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
 }
 
 .btn-cancel-window:hover {
-  background: #ef4444;
+  background: var(--status-error);
   color: #fff;
 }
 
@@ -358,7 +420,7 @@ html, body, #root {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -366,7 +428,7 @@ html, body, #root {
 
 .chat-empty {
   text-align: center;
-  color: #444;
+  color: var(--text-dim);
   font-size: 13px;
   margin-top: 40%;
 }
@@ -374,23 +436,27 @@ html, body, #root {
 .chat-msg {
   max-width: 85%;
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   font-size: 13px;
   line-height: 1.5;
   word-wrap: break-word;
 }
 
+/* 用户气泡：主色淡填充，与整体紫灰基调一致 */
 .chat-msg.user {
   align-self: flex-end;
-  background: #2a2a3e;
-  color: #e4e4e7;
+  background: rgba(124, 58, 237, 0.16);
+  border: 1px solid rgba(124, 58, 237, 0.26);
+  color: var(--text);
   border-bottom-right-radius: 4px;
 }
 
+/* 助手气泡：中性表面色，不再用偏蓝的 #1e293b */
 .chat-msg.assistant {
   align-self: flex-start;
-  background: #1e293b;
-  color: #cbd5e1;
+  background: var(--bg-bubble);
+  border: 1px solid var(--border-subtle);
+  color: #d4d4d8;
   border-bottom-left-radius: 4px;
 }
 
@@ -399,14 +465,14 @@ html, body, #root {
   align-self: flex-start;
   background: rgba(124, 58, 237, 0.08);
   border: 1px dashed rgba(124, 58, 237, 0.3);
-  color: #a0aec0;
+  color: var(--text-muted);
   border-bottom-left-radius: 4px;
   font-size: 12px;
   max-width: 95%;
 }
 
 .chat-msg.reasoning-streaming .chat-msg-label {
-  color: #a78bfa;
+  color: var(--accent-soft);
   font-size: 11px;
   margin-bottom: 4px;
   display: flex;
@@ -420,7 +486,7 @@ html, body, #root {
   overflow-y: auto;
   line-height: 1.6;
   white-space: pre-wrap;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 12px;
   padding-left: 4px;
 }
@@ -449,7 +515,7 @@ html, body, #root {
 .reasoning-summary {
   cursor: pointer;
   font-size: 11px;
-  color: #a78bfa;
+  color: var(--accent-soft);
   list-style: none;
   user-select: none;
   padding: 2px 0;
@@ -470,7 +536,7 @@ html, body, #root {
 
 /* 思考摘要行中的耗时显示 */
 .reasoning-duration {
-  color: #888;
+  color: var(--text-muted);
   font-size: 10px;
   margin-left: 4px;
   white-space: nowrap;
@@ -479,7 +545,7 @@ html, body, #root {
 /* 折叠面板内容 */
 .reasoning-details > .reasoning-content-text {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--text-muted);
   line-height: 1.6;
   white-space: pre-wrap;
   padding: 6px 8px;
@@ -501,7 +567,7 @@ html, body, #root {
 
 .chat-msg-label {
   font-size: 11px;
-  color: #888;
+  color: var(--text-muted);
   margin-bottom: 3px;
 }
 
@@ -512,7 +578,7 @@ html, body, #root {
 /* 流式输出光标动画 */
 .chat-msg.streaming .streaming-cursor {
   display: inline-block;
-  color: #7c3aed;
+  color: var(--accent);
   font-weight: bold;
   animation: blink 0.8s infinite;
 }
@@ -524,22 +590,22 @@ html, body, #root {
 
 .chat-error {
   align-self: flex-start;
-  background: #1c1016;
-  border: 1px solid #ef444433;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
   color: #fca5a5;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 12px;
 }
 
 /* 取消提示横幅：灰色调，区别于错误（红色） */
 .chat-canceled {
   align-self: flex-start;
-  background: #1a1d23;
-  border: 1px solid #94a3b833;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.22);
   color: #94a3b8;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 12px;
 }
 
@@ -553,12 +619,12 @@ html, body, #root {
 }
 
 .chat-messages::-webkit-scrollbar-thumb {
-  background: #333;
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 3px;
 }
 
 .chat-messages::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: rgba(255, 255, 255, 0.22);
 }
 
 /* ====== 关于对话框（应用内模态框，替代 alert()） ====== */
@@ -573,9 +639,9 @@ html, body, #root {
 }
 
 .modal-dialog {
-  background: #1a1a1f;
-  border: 1px solid #2a2a32;
-  border-radius: 8px;
+  background: #1a1a21;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   padding: 24px;
   min-width: 280px;
   max-width: 420px;
@@ -585,13 +651,13 @@ html, body, #root {
 .modal-title {
   font-size: 16px;
   font-weight: 700;
-  color: #a78bfa;
+  color: var(--accent-soft);
   margin-bottom: 12px;
 }
 
 .modal-body {
   font-size: 14px;
-  color: #e4e4e7;
+  color: var(--text);
   margin-bottom: 20px;
   word-break: break-word;
 }
@@ -610,7 +676,7 @@ html, body, #root {
 
 .shortcut-hint {
   font-size: 12px;
-  color: #a1a1aa;
+  color: var(--text-muted);
   margin-bottom: 10px;
 }
 
@@ -622,7 +688,7 @@ html, body, #root {
 
 .shortcut-table td {
   padding: 5px 0;
-  border-bottom: 1px solid #26262e;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .shortcut-table tr:last-child td {
@@ -640,10 +706,10 @@ html, body, #root {
   min-width: 18px;
   padding: 1px 6px;
   margin-left: 4px;
-  border: 1px solid #3f3f46;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
-  background: #26262e;
-  color: #e4e4e7;
+  background: var(--bg-surface-2);
+  color: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   line-height: 18px;
@@ -667,18 +733,18 @@ html, body, #root {
   display: flex;
   gap: 4px;
   padding: 3px;
-  border: 1px solid #2a2a35;
-  border-radius: 8px;
-  background: #121216;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-1);
 }
 
 .mode-btn {
   height: 26px;
   padding: 0 12px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: #888;
+  color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -687,11 +753,11 @@ html, body, #root {
 }
 
 .mode-btn:hover:not(:disabled) {
-  color: #ccc;
+  color: var(--text);
 }
 
 .mode-btn.active {
-  background: #7c3aed;
+  background: var(--accent);
   color: #fff;
 }
 
@@ -706,8 +772,9 @@ html, body, #root {
   flex-wrap: wrap;
   gap: 4px 10px;
   padding: 6px 12px;
-  background: #14141a;
-  border-bottom: 1px solid #23232c;
+  /* 与头部同为二级表面，中间用细线分隔，不再和头部各用一个色 */
+  background: var(--bg-surface-2);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -725,11 +792,11 @@ html, body, #root {
 }
 
 .chat-metric-label {
-  color: #6b7280;
+  color: var(--text-dim);
 }
 
 .chat-metric-value {
-  color: #9ca3af;
+  color: var(--text-muted);
 }
 
 /* ====== 梯度扫描面板 ====== */
@@ -746,20 +813,20 @@ html, body, #root {
 
 .sweep-progress-text {
   font-size: 12px;
-  color: #f59e0b;
+  color: var(--status-sending);
   margin-bottom: 4px;
 }
 
 .sweep-progress-bar {
   height: 4px;
   border-radius: 2px;
-  background: #26262f;
+  background: var(--border-subtle);
   overflow: hidden;
 }
 
 .sweep-progress-fill {
   height: 100%;
-  background: #7c3aed;
+  background: var(--accent);
   transition: width 0.2s linear;
 }
 
@@ -778,10 +845,10 @@ html, body, #root {
 .sweep-chart {
   flex: 1 1 280px;
   min-width: 240px;
-  border: 1px solid #23232c;
-  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   padding: 6px 8px 2px 8px;
-  background: #101014;
+  background: var(--bg-surface-1);
 }
 
 .sweep-chart-head {
@@ -794,7 +861,7 @@ html, body, #root {
 }
 
 .sweep-chart-unit {
-  color: #6b7280;
+  color: var(--text-dim);
   font-size: 10px;
 }
 
@@ -810,7 +877,7 @@ html, body, #root {
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  color: #4b5563;
+  color: var(--text-dim);
 }
 
 .sweep-table {
