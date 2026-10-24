@@ -1,7 +1,16 @@
 use crate::llm_tool::{ChatMessage, ChatParams, ClientConfig, LlmClient, StreamEvent, FinishInfo, Timings};
 use crate::types::{LLMRequestConfig, SingleResult, StreamChunkEvent};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use tauri::Emitter;
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+
+/// 用户主动取消时的统一文案
+///
+/// 目前同时作为前后端约定的判别值（前端据 `error` 内容识别取消态），
+/// 修改时必须同步调整 `src/App.tsx`。
+const CANCELED_MESSAGE: &str = "用户已取消";
 
 /// 默认请求超时（秒）
 ///
@@ -15,6 +24,55 @@ const DEFAULT_TIMEOUT_SECS: u64 = 600;
 /// 阶段时长过短时（例如所有 token 在一个 chunk 里一次性到达），
 /// `tokens / duration` 会被放大成毫无参考价值的天文数字，直接视为无数据。
 const MIN_PHASE_DURATION_MS: u128 = 10;
+
+// ============================ 客户端缓存 ============================
+
+/// 客户端缓存键
+///
+/// `reqwest::Client` 的超时在构建时固定，因此超时值变化也必须重建客户端。
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ClientKey {
+    base_url: String,
+    api_key: String,
+    timeout_secs: u64,
+}
+
+/// 缓存条目上限：超出后整体清空，避免长时间运行下无界增长
+const CLIENT_CACHE_LIMIT: usize = 16;
+
+/// 全局客户端缓存
+///
+/// 压测场景必须复用连接池：每次新建 `reqwest::Client` 都会重新做 DNS/TCP/TLS 握手，
+/// 握手耗时会被计入 TTFT 与总耗时，从而污染 token/s 统计；
+/// 并发时还会造成大量短连接，瓶颈变成客户端自己而不是被测服务。
+static CLIENT_CACHE: OnceLock<Mutex<HashMap<ClientKey, LlmClient>>> = OnceLock::new();
+
+fn client_cache() -> &'static Mutex<HashMap<ClientKey, LlmClient>> {
+    CLIENT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 获取可复用的客户端：命中缓存直接返回克隆，否则创建并写入缓存
+async fn get_client(config: ClientConfig) -> crate::llm_tool::Result<LlmClient> {
+    let key = ClientKey {
+        base_url: config.base_url.clone(),
+        api_key: config.api_key.clone(),
+        timeout_secs: config.timeout_secs,
+    };
+
+    let mut cache = client_cache().lock().await;
+    if let Some(client) = cache.get(&key) {
+        return Ok(client.clone());
+    }
+
+    // 创建过程是同步的（不发起网络请求），持锁时间极短
+    let client = LlmClient::new(config)?;
+    // 超出上限时整体清空：桌面工具场景缓存条目极少，无需精细淘汰策略
+    if cache.len() >= CLIENT_CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(key, client.clone());
+    Ok(client)
+}
 
 /// 通用 tps 计算：tokens / 秒；零 token 或窗口过短时返回 None
 fn tokens_per_second(tokens: u64, duration_ms: u128) -> Option<f64> {
@@ -180,11 +238,32 @@ fn emit_canceled(
         reasoning_content: None,
         finished: true,
         // 用统一的"用户已取消"文案，便于前端展示
-        error: Some("用户已取消".to_string()),
+        error: Some(CANCELED_MESSAGE.to_string()),
         duration_ms: start.elapsed().as_millis(),
         completion_tokens_per_second: None,
         prompt_tokens_per_second: None,
     });
+}
+
+/// 构造"用户已取消"的统一返回值
+///
+/// 取消事件已由 [`emit_canceled`] 发出，这里保证返回值与事件语义一致，
+/// 并保留已累积的部分内容。
+fn canceled_result(
+    window_id: usize,
+    duration_ms: u128,
+    assistant_content: String,
+    reasoning_content: String,
+) -> SingleResult {
+    SingleResult {
+        window_id,
+        assistant_content,
+        duration_ms,
+        completion_tokens_per_second: None,
+        prompt_tokens_per_second: None,
+        error: Some(CANCELED_MESSAGE.to_string()),
+        reasoning_content: Some(reasoning_content),
+    }
 }
 
 /// 合并流中多次到达的结束信息
@@ -265,8 +344,8 @@ pub async fn execute_stream_request(
         timeout_secs: config.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
     };
 
-    // 2. 创建客户端
-    let client = match LlmClient::new(client_config) {
+    // 2. 获取客户端（按 base_url / api_key / 超时复用连接池）
+    let client = match get_client(client_config).await {
         Ok(c) => c,
         Err(e) => {
             let error_msg = format!("客户端初始化失败: {e}");
@@ -293,7 +372,25 @@ pub async fn execute_stream_request(
     };
 
     // 5. 发送流式请求，获取事件接收端
-    let mut rx = match client.chat_stream(messages, &params).await {
+    //
+    // 建连（DNS/TCP/TLS + 等待响应头）可能长时间挂起，且此阶段不会产生任何流式事件；
+    // 因此必须与取消信号一起 select，否则服务端卡住时取消按钮完全失效。
+    let request_result = tokio::select! {
+        biased;
+        _ = cancel_token.cancelled() => {
+            // 建连阶段就收到取消：SSE 流尚未建立，没有已累积内容
+            emit_canceled(&app, window_id, start);
+            return canceled_result(
+                window_id,
+                start.elapsed().as_millis(),
+                String::new(),
+                String::new(),
+            );
+        }
+        result = client.chat_stream(messages, &params) => result,
+    };
+
+    let mut rx = match request_result {
         Ok(rx) => rx,
         Err(e) => {
             let error_msg = format!("流式请求发送失败: {e}");
@@ -390,16 +487,12 @@ pub async fn execute_stream_request(
     // 8. 取消：发送统一的"用户已取消"完成事件，不算错误
     if canceled {
         emit_canceled(&app, window_id, start);
-        return SingleResult {
+        return canceled_result(
             window_id,
-            assistant_content: accumulated_content,
-            duration_ms: total_duration_ms,
-            completion_tokens_per_second: None,
-            prompt_tokens_per_second: None,
-            // 返回值的 error 也要带上"用户已取消"，便于调用方区分
-            error: Some("用户已取消".to_string()),
-            reasoning_content: Some(accumulated_reasoning),
-        };
+            total_duration_ms,
+            accumulated_content,
+            accumulated_reasoning,
+        );
     }
 
     // 9. 异常收敛：解析失败、或流未收到完成标记（既无 finish_reason 也无 [DONE]）
@@ -643,5 +736,29 @@ mod tests {
         assert!(info.usage.is_some(), "usage 应被合并进来");
         let timings = info.timings.expect("timings 不应被后续 usage 覆盖丢失");
         assert!((timings.predicted_per_second - 20.0).abs() < 0.001);
+    }
+
+    /// 跨层回归：前端用 camelCase 键 `reasoningContent` 传递推理链，
+    /// 必须能被反序列化并透传到请求体中。
+    ///
+    /// 之前后端字段为 snake_case 且无 alias，serde 会静默忽略该字段，
+    /// 导致“多轮透传推理链”实际上从未生效。
+    #[test]
+    fn test_reasoning_content_camel_case_is_passed_through() {
+        let json = serde_json::json!([
+            { "role": "user", "content": "第一轮提问" },
+            { "role": "assistant", "content": "第一轮回答", "reasoningContent": "推理链" },
+            { "role": "assistant", "content": "无推理链的回答" }
+        ]);
+        let messages: Vec<crate::types::ChatMessage> =
+            serde_json::from_value(json).expect("前端消息应能反序列化");
+
+        assert_eq!(messages[1].reasoning_content.as_deref(), Some("推理链"));
+        assert!(messages[2].reasoning_content.is_none());
+
+        // 转换后必须真正进入发往 API 的消息体中
+        let converted = convert_messages(&messages);
+        assert_eq!(converted[1].reasoning_content.as_deref(), Some("推理链"));
+        assert!(converted[0].reasoning_content.is_none(), "user 消息不携带推理链");
     }
 }

@@ -760,6 +760,9 @@ impl ChatChunk {
 ///
 /// 封装了非流式和流式两种调用方式，内部使用 reqwest 发送请求，
 /// 通过 SSE 解析器处理流式响应。
+///
+/// 克隆开销极小：`reqwest::Client` 内部共享连接池，仅做引用计数。
+#[derive(Clone)]
 pub struct LlmClient {
     /// 底层 HTTP 客户端（连接池复用）
     http: ReqwestClient,

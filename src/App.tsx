@@ -247,8 +247,13 @@ function App() {
   }, [concurrency]);
 
   const handleSend = async () => {
+    // 防重复提交：上一轮流式尚未结束时（按钮/回车都可能触发）直接忽略。
+    // 否则会重复追加 user 消息，并让后端覆盖注册导致上一轮被取消、半截内容写进历史。
+    if (windowsRef.current.some((w) => w.status === "sending")) return;
     if (!message.trim() || !baseURL.trim() || !apiKey.trim()) return;
     const userMessage = message.trim();
+    // 立刻清空输入框：既避免重复提交，也避免流式结束后清掉用户新输入的内容
+    setMessage("");
 
     // 1) 构造发往后端的完整消息：基于 0 号窗口最新 messages 追加本轮 user。
     //    先算出 fullMessages，再 setWindows，避免依赖 setState 异步时机导致漏发 user。
@@ -302,8 +307,17 @@ function App() {
       })
     );
 
-    await Promise.all(promises);
-    setMessage("");
+    await Promise.all(promises).catch((e) => {
+      // 命令本身 reject（后端 panic、state 缺失等）时不会有任何流式事件到达，
+      // 这里兜底把仍处于 sending 的窗口置为错误态，避免界面永久停在转圈状态
+      setWindows((prev) =>
+        prev.map((w) =>
+          w.status === "sending"
+            ? { ...w, status: "error" as const, error: String(e) }
+            : w
+        )
+      );
+    });
     // 状态变更由 stream_chunk 事件回调统一处理
   };
 
@@ -423,7 +437,12 @@ function App() {
           </div>
 
           <div className="config-actions">
-            <button className="btn btn-primary" onClick={handleSend}>
+            <button
+              className="btn btn-primary"
+              onClick={handleSend}
+              // 发送中禁用：避免重复提交造成历史错乱
+              disabled={anySending}
+            >
               {t("config.send")}
             </button>
             {/* 全部取消：仅在有窗口处于 sending 时才可点击，避免无意义操作 */}

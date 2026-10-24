@@ -73,6 +73,9 @@ pub struct ChatMessage {
     pub role: String,
     pub content: String,
     /// 思考/推理内容（推理模型在多轮对话时要求携带上一轮 assistant 的推理链）
-    #[serde(default)]
+    ///
+    /// 前端使用 camelCase 键 `reasoningContent` 传递，这里通过 alias 兼容，
+    /// 否则 serde 会静默忽略该字段，导致推理链永远不会被透传。
+    #[serde(default, alias = "reasoningContent")]
     pub reasoning_content: Option<String>,
 }

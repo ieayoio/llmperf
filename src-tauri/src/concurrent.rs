@@ -48,11 +48,12 @@ pub async fn run_concurrent_requests(
             let window_id = config.window_id;
             let registry = registry.clone();
             let handle = tauri::async_runtime::spawn(async move {
-                // 为该窗口注册一个独立的取消 token
-                let token = registry.register(window_id).await;
+                // 为该窗口注册一个独立的取消 token，并记住注册序号
+                let (seq, token) = registry.register(window_id).await;
                 let result = execute_stream_request(app, window_id, config, token).await;
-                // 请求结束（无论正常 / 错误 / 取消）后清理 token
-                registry.unregister(window_id).await;
+                // 请求结束（无论正常 / 错误 / 取消）后清理 token；
+                // 带上序号，避免误删期间新请求注册的 token
+                registry.unregister(window_id, seq).await;
                 result
             });
             (window_id, handle)
