@@ -143,6 +143,30 @@ npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
 
 > 💡 Reference: [Windows Installer Build Guide](https://v2.tauri.app/distribute/windows-installer/)
 
+#### Bundler Tool Download Mirror (Optional)
+
+When packaging a Windows installer, Tauri downloads the NSIS toolchain and plugins from GitHub Releases (`nsis-*.zip`, `nsis_tauri_utils.dll`), and WiX for MSI. If GitHub is slow or unreachable, point the bundler to a mirror through these environment variables — no source changes needed:
+
+| Variable | Description |
+|----------|-------------|
+| `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR_TEMPLATE` | Template mode, supports `<owner>`, `<repo>`, `<version>`, `<asset>` placeholders; takes precedence |
+| `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` | Domain-only mode, resolves to `<mirror>/https://github.com/...`, only usable if the mirror supports that path shape |
+
+Template mode is recommended; replace `<your-mirror>` with any mirror that exposes a GitHub acceleration path:
+
+```bash
+# Placeholders are filled in by the bundler, no manual editing needed
+# Example for Linux/macOS; on Windows use cross-env or system environment variables
+export TAURI_BUNDLER_TOOLS_GITHUB_MIRROR_TEMPLATE='https://<your-mirror>/github.com/<owner>/<repo>/releases/download/<version>/<asset>'
+```
+
+The build log prints the actual request URL — seeing the mirror domain means it took effect. Notes:
+
+- Only applies to `github.com/*/releases/download/*` URLs; other sources (such as the WebView2 installer) are unaffected
+- SHA1 is still verified after download, so a mismatched mirror fails loudly instead of producing a broken installer
+- Tools are cached in `~/.cache/tauri/NSIS` (Linux) and downloaded only once; delete that directory to force a re-download
+- On non-Windows hosts the bundler calls the system `makensis` (Linux default `/usr/share/nsis`, override with `NSIS_PATH`), so NSIS must be installed
+
 Build artifacts are located in `src-tauri/target/release/bundle/` directory, depending on the target platform:
 
 | Platform | Format | Path |

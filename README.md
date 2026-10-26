@@ -143,6 +143,30 @@ npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc
 
 > 💡 参考链接：[Windows Installer 构建指南](https://v2.tauri.app/distribute/windows-installer/)
 
+#### 打包工具下载镜像（可选）
+
+打包 Windows 安装包时，Tauri 会从 GitHub Releases 下载 NSIS 工具链与插件（`nsis-*.zip`、`nsis_tauri_utils.dll`），打 MSI 还会下载 WiX。网络受限时可通过环境变量让 bundler 走镜像，CLI 已内建支持，无需改源码：
+
+| 变量 | 说明 |
+|------|------|
+| `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR_TEMPLATE` | 模板方式，支持 `<owner>`、`<repo>`、`<version>`、`<asset>` 占位符，优先级更高 |
+| `TAURI_BUNDLER_TOOLS_GITHUB_MIRROR` | 仅域名方式，会拼成 `<mirror>/https://github.com/...`，仅当镜像站支持这种路径时才适用 |
+
+推荐使用模板方式，把 `<your-mirror>` 换成任意提供 GitHub 加速路径的镜像站：
+
+```bash
+# 占位符由 bundler 按实际下载的资源自动替换，无需手动改
+# 以 Linux/macOS 为例，Windows 下可用 cross-env 或系统环境变量设置
+export TAURI_BUNDLER_TOOLS_GITHUB_MIRROR_TEMPLATE='https://<your-mirror>/github.com/<owner>/<repo>/releases/download/<version>/<asset>'
+```
+
+设置后构建日志会打印实际请求地址，出现镜像域名即表示生效。补充说明：
+
+- 只作用于 `github.com/*/releases/download/*` 形式的地址，其他下载源（如 WebView2 安装器）不受影响
+- 下载后仍会校验 SHA1，镜像内容不一致会直接报错，不会静默产生坏包
+- 工具缓存在 `~/.cache/tauri/NSIS`（Linux），下载成功一次后不会重复下载；需强制重下时删除该目录
+- 非 Windows 主机调用的是系统 `makensis`（Linux 默认 `/usr/share/nsis`，可用 `NSIS_PATH` 覆盖），需自行安装 NSIS
+
 构建产物位于 `src-tauri/target/release/bundle/` 目录下，具体取决于目标平台：
 
 | 平台 | 格式 | 路径 |
